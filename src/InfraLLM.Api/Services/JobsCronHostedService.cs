@@ -128,7 +128,10 @@ public class JobsCronHostedService : BackgroundService
 
             _runningJobs.Add(job.Id);
             _ = RunJobAsync(job, jobRepo, sessionRepo, hostRepo, hostNoteRepo, policyRepo, promptRepo, llmService, now, ct)
-                .ContinueWith(_ => _runningJobs.Remove(job.Id), ct);
+                .ContinueWith(_ => _runningJobs.Remove(job.Id),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
         }
 
         if (dueCount > 0)
@@ -163,6 +166,16 @@ public class JobsCronHostedService : BackgroundService
                 return;
             }
 
+            run = new JobRun
+            {
+                JobId = job.Id,
+                TriggeredBy = "cron",
+                Status = "received",
+                Payload = job.Prompt ?? string.Empty,
+            };
+
+            run = await jobRepo.AddRunAsync(run, ct);
+
             session = new Session
             {
                 OrganizationId = job.OrganizationId,
@@ -173,16 +186,8 @@ public class JobsCronHostedService : BackgroundService
 
             session = await sessionRepo.CreateAsync(session, ct);
 
-            run = new JobRun
-            {
-                JobId = job.Id,
-                TriggeredBy = "cron",
-                Status = "received",
-                Payload = job.Prompt ?? string.Empty,
-                SessionId = session.Id
-            };
-
-            run = await jobRepo.AddRunAsync(run, ct);
+            run.SessionId = session.Id;
+            await jobRepo.UpdateRunAsync(run, ct);
 
             if (string.Equals(job.Name, DailyHostNotesJobName, StringComparison.OrdinalIgnoreCase))
             {
