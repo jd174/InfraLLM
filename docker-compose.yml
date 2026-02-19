@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: infrallm
+      POSTGRES_PASSWORD: infrallm_dev
+      POSTGRES_DB: infrallm_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infrallm"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  infrallm:
+    build:
+      context: .
+      dockerfile: Dockerfile.allinone
+    ports:
+      - "3010:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://0.0.0.0:8080
+      - FRONTEND_PORT=3000
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=infrallm_dev;Username=infrallm;Password=infrallm_dev
+      - Jwt__Secret=dev_secret_key_at_least_32_characters_long_for_hmac_sha256!
+      - Jwt__Issuer=InfraLLM
+      - Jwt__Audience=InfraLLM
+      - CredentialEncryption__MasterKey=dev_secret_key_at_least_32_characters_long_for_hmac_sha256!
+      - Anthropic__ApiKey=${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

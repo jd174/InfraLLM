@@ -1,0 +1,169 @@
+# InfraLLM
+
+> Alpha status: This product is in early development. Use at your own risk.
+
+InfraLLM is an open source infrastructure assistant. Using plain english, sysadmins can troubleshoot issues, add functionality and perform maintenance on their servers. The InfraLLM API layer sits between the servers and the LLM providing tooling, guardrails, and a full audit log. 
+
+It’s a chat-first workflow for ops work: policy enforcement, credential encryption, approvals, and streaming responses. You get the speed and knowledge of LLMs without surrendering control.
+
+InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled jobs, webhook-triggered workflows, and repeatable incident response playbooks that can run across fleets with approvals and logging baked in.
+
+![screenshot placeholder](docs/screenshot.png)
+
+---
+
+## Demo
+
+
+![InfraLLM demo](docs/ChatDemo.gif)
+
+---
+
+## What it does
+
+- **Natural language SSH** — describe a task, InfraLLM plans and executes solutions.
+- **Host management** — add servers via ssh credentials (Encrypted at rest!)
+- **Jobs + webhooks** — trigger automated incident workflows from monitoring alerts, ticketing systems, or internal tooling
+- **Approval flows** — sensitive or destructive commands require explicit confirmation before execution
+- **Audit logging** — every command and response is logged against the user who triggered it
+- **Streaming responses** — chat UI streams responses in real time via SignalR
+- **JWT auth** — register/login, tokens stored in browser, backend fully stateless
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+	U["Operator"] --> UI["Web UI (Next.js)"]
+	UI --> API["InfraLLM API"]
+	API --> AUTH["JWT Auth"]
+	API --> POLICY["Policy & Approval"]
+	API <--> LLM["LLM Provider"]
+	POLICY -- "approved commands" --> HOSTS["Hosts (SSH)"]
+	POLICY -- "tool calls" --> MCP["MCP Servers"]
+	HOSTS --> API
+	MCP --> API
+	API --> AUDIT["Audit Log"]
+	API --> UI
+```
+
+---
+
+## Tech stack
+
+| Layer | Tech |
+|---|---|
+| Backend | ASP.NET Core (.NET 10), SignalR, Entity Framework Core |
+| Database | PostgreSQL 16 |
+| Cache/Sessions | Redis 7 |
+| Frontend | Next.js (standalone build) |
+| LLM | Anthropic Claude (via API key) |
+| Container | Docker, nginx (all-in-one image) |
+
+---
+
+## Environment variables
+
+These are the key variables you'll need to configure. For local dev, everything has hardcoded defaults in `docker-compose.yml` — the only one you need to supply is `ANTHROPIC_API_KEY`.
+
+| Variable | Description | Example |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Your Anthropic API key | `sk-ant-...` |
+| `ConnectionStrings__DefaultConnection` | Postgres connection string | `Host=postgres;Port=5432;Database=infrallm;Username=infrallm;Password=secret` |
+| `Jwt__Secret` | JWT signing secret (min 32 chars) | `some_long_random_secret_here` |
+| `Jwt__Issuer` | JWT issuer | `InfraLLM` |
+| `Jwt__Audience` | JWT audience | `InfraLLM` |
+| `CredentialEncryption__MasterKey` | Encrypts SSH credentials at rest | `$(openssl rand -base64 32)` |
+| `Cors__Origins` | Allowed CORS origins | `http://localhost:3010` |
+| `NEXT_PUBLIC_API_URL` | Frontend API base URL | `http://localhost:5010` |
+| `Anthropic__MaxTokens` | Max tokens per LLM response | `8192` |
+
+For production, you'll want to generate real secrets for `Jwt__Secret` and `CredentialEncryption__MasterKey` — don't reuse the dev defaults.
+
+---
+
+## Deployment
+
+### All-in-one container (recommended)
+
+The all-in-one image bundles the backend and frontend into a single container behind nginx. This is the simplest way to self-host.
+
+```bash
+docker pull ghcr.io/jd174/infrallm:main
+```
+
+Ports inside the container:
+- `80` — nginx reverse proxy (routes `/api` to backend, everything else to frontend)
+- `8080` — backend (internal)
+- `3000` — frontend (internal)
+
+A sample production compose file is in `docker-compose.prod.yml`. Use this file to get started quickly. It runs the all-in-one app with Postgres and Redis. Make sure to update the JWT key. It need to be at least 32 characters for the app to run.
+
+### Portainer
+
+If you're using Portainer, deploy `docker-compose.prod.yml` directly as a Stack. Set these environment variables in the Portainer UI:
+
+| Variable | Notes |
+|---|---|
+| `POSTGRES_PASSWORD` | Strong password for the database |
+| `JWT_SECRET` | At least 32 random characters |
+| `ANTHROPIC_API_KEY` | From console.anthropic.com |
+| `CREDENTIAL_MASTER_KEY` | `openssl rand -base64 32` |
+| `CORS_ORIGINS` | Your frontend's public URL |
+
+### Separate containers
+
+If you'd rather run backend and frontend separately, both have individual Dockerfiles:
+- `src/InfraLLM.Api/Dockerfile` — backend only
+- `frontend/Dockerfile` — frontend only
+
+You'll need to configure `NEXT_PUBLIC_API_URL` to point the frontend at your backend.
+
+---
+
+## Ports reference
+
+| Service | Host port | Container port |
+|---|---|---|
+| UI (dev) | `3010` | `3000` |
+| API (dev) | `5010` | `8080` |
+| All-in-one | `3010` | `80` |
+| Postgres | `5432` | `5432` |
+| Redis | `6379` | `6379` |
+
+---
+
+## Authentication
+
+Register an account through the UI on first run. JWTs are issued on login and stored in the browser. There's no magic admin account — just register and go.
+
+If login fails unexpectedly, check that your database migrations ran and that `Jwt__Secret` is at least 32 characters.
+
+---
+
+## Troubleshooting
+
+**Build error: `Resource file "**/*.resx" cannot be found`**
+Default embedded resources are disabled in `InfraLLM.Infrastructure.csproj` — this is intentional.
+
+**Chat responses cut off early**
+Increase `Anthropic__MaxTokens`. The default is 8192; Claude supports up to 32k+ depending on the model.
+
+**SignalR streaming not working**
+Make sure `NEXT_PUBLIC_API_URL` (or `NEXT_PUBLIC_WS_URL` if set separately) points to your backend host and that CORS is configured to allow your frontend origin.
+
+**Migrations not running**
+Check the backend container logs on startup. EF Core runs `MigrateAsync()` at startup — if Postgres isn't healthy yet, the app will retry via health check dependencies.
+
+---
+
+## Contributing
+
+PRs and issues welcome. If you're adding a feature, open an issue first so we can talk through the approach.
+
+---
+
+## License
+
+MIT

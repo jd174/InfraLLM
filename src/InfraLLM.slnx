@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="InfraLLM.Api/InfraLLM.Api.csproj" />
+  <Project Path="InfraLLM.Core/InfraLLM.Core.csproj" />
+  <Project Path="InfraLLM.Infrastructure/InfraLLM.Infrastructure.csproj" />
+  <Project Path="InfraLLM.Tests/InfraLLM.Tests.csproj" />
+</Solution>

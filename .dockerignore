@@ -1,0 +1,26 @@
+# Git
+.git
+.gitignore
+.gitea
+
+# IDE / editor
+.vs
+.vscode
+*.user
+*.suo
+
+# .NET build output
+**/bin/
+**/obj/
+**/bin\Debug/
+
+# Node
+**/node_modules/
+
+# Docker / CI
+docker-compose*.yml
+Dockerfile
+Dockerfile.*
+!Dockerfile.allinone
+*.log
+README.md
