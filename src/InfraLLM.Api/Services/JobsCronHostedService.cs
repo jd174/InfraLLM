@@ -126,6 +126,9 @@ public class JobsCronHostedService : BackgroundService
             dueCount++;
             _logger.LogInformation("Cron job {JobId} due. Last={Last} Next={Next} Now={Now}", job.Id, last, next, now);
 
+            // Optimistically stamp LastRunAt so subsequent ticks within the same minute don't re-fire this job
+            job.LastRunAt = now;
+
             _runningJobs.Add(job.Id);
             _ = RunJobAsync(job, jobRepo, sessionRepo, hostRepo, hostNoteRepo, policyRepo, promptRepo, llmService, now, ct)
                 .ContinueWith(_ => _runningJobs.Remove(job.Id),
