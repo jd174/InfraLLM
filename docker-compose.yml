@@ -37,6 +37,7 @@ services:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://0.0.0.0:8080
       - FRONTEND_PORT=3000
+      - Cron__TimeZone=${CRON_TIMEZONE:-America/New_York}
       - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=infrallm_dev;Username=infrallm;Password=infrallm_dev
       - Jwt__Secret=dev_secret_key_at_least_32_characters_long_for_hmac_sha256!
       - Jwt__Issuer=InfraLLM
