@@ -18,6 +18,7 @@ public class AnthropicLlmService : ILlmService
     private readonly HttpClient _httpClient;
     private readonly ICommandExecutor _commandExecutor;
     private readonly IHostRepository _hostRepository;
+    private readonly IHostNoteRepository _hostNoteRepository;
     private readonly IMcpToolRegistry _mcpToolRegistry;
     private readonly JsonSerializerOptions _jsonOptions;
 
@@ -35,6 +36,7 @@ public class AnthropicLlmService : ILlmService
         HttpClient httpClient,
         ICommandExecutor commandExecutor,
         IHostRepository hostRepository,
+        IHostNoteRepository hostNoteRepository,
         IMcpToolRegistry mcpToolRegistry)
     {
         _config = config;
@@ -42,6 +44,7 @@ public class AnthropicLlmService : ILlmService
         _httpClient = httpClient;
         _commandExecutor = commandExecutor;
         _hostRepository = hostRepository;
+        _hostNoteRepository = hostNoteRepository;
         _mcpToolRegistry = mcpToolRegistry;
 
         _httpClient.BaseAddress = new Uri("https://api.anthropic.com");
@@ -713,6 +716,33 @@ public class AnthropicLlmService : ILlmService
                     return result.StandardOutput ?? result.StandardError ?? "";
                 }
 
+                case "update_host_notes":
+                {
+                    var hostId = GetStringParam(input, "host_id");
+                    var content = GetStringParam(input, "content");
+
+                    if (string.IsNullOrEmpty(hostId) || string.IsNullOrWhiteSpace(content))
+                        return "Error: host_id and content are required parameters";
+
+                    if (!Guid.TryParse(hostId, out var hostGuid))
+                        return "Error: host_id must be a valid UUID";
+
+                    var host = await _hostRepository.GetByIdAsync(hostGuid, ct);
+                    if (host == null || host.OrganizationId != organizationId)
+                        return "Error: host not found or access denied";
+
+                    var note = new HostNote
+                    {
+                        OrganizationId = organizationId,
+                        HostId = hostGuid,
+                        Content = content.Trim(),
+                        UpdatedByUserId = userId
+                    };
+
+                    await _hostNoteRepository.UpsertAsync(note, ct);
+                    return $"Updated host notes for {host.Name} ({host.Id})";
+                }
+
                 case "tail_logs":
                 {
                     var hostId = GetStringParam(input, "host_id");
@@ -980,6 +1010,7 @@ public class AnthropicLlmService : ILlmService
             - execute_command: Execute a shell command on a specified host
             - read_file: Read the contents of a file on a host
             - check_service_status: Check the status of a systemd service on a host
+            - update_host_notes: Update the stored notes for a host
             {mcpToolSection}
             Rules:
             1. Always explain what you're about to do before executing commands.
@@ -1113,6 +1144,21 @@ public class AnthropicLlmService : ILlmService
                     ["service_name"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "Name of the systemd service (e.g., nginx, docker)" }
                 },
                 ["required"] = new[] { "host_id", "service_name" }
+            }
+        },
+        new Dictionary<string, object>
+        {
+            ["name"] = "update_host_notes",
+            ["description"] = "Update the stored notes for a host.",
+            ["input_schema"] = new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["host_id"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "The UUID of the target host" },
+                    ["content"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "The updated notes content" }
+                },
+                ["required"] = new[] { "host_id", "content" }
             }
         },
         new Dictionary<string, object>

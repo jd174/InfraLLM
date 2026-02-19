@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Cronos;
 using InfraLLM.Core.Enums;
 using InfraLLM.Core.Interfaces;
@@ -98,12 +99,23 @@ public class JobsCronHostedService : BackgroundService
         DateTime now,
         CancellationToken ct)
     {
+        var session = new Session
+        {
+            OrganizationId = job.OrganizationId,
+            UserId = job.UserId,
+            Title = $"Job: {job.Name} ({now:yyyy-MM-dd HH:mm})",
+            IsJobRunSession = true
+        };
+
+        session = await sessionRepo.CreateAsync(session, ct);
+
         var run = new JobRun
         {
             JobId = job.Id,
             TriggeredBy = "cron",
             Status = "received",
-            Payload = job.Prompt ?? string.Empty
+            Payload = job.Prompt ?? string.Empty,
+            SessionId = session.Id
         };
 
         run = await jobRepo.AddRunAsync(run, ct);
@@ -112,7 +124,26 @@ public class JobsCronHostedService : BackgroundService
         {
             if (string.Equals(job.Name, DailyHostNotesJobName, StringComparison.OrdinalIgnoreCase))
             {
+                var dailyUserMessage = new Message
+                {
+                    SessionId = session.Id,
+                    Role = "user",
+                    Content = job.Prompt ?? "Run daily host notes refresh."
+                };
+
+                await sessionRepo.AddMessageAsync(dailyUserMessage, ct);
+
                 var summary = await RunHostNotesJobAsync(job, hostRepo, hostNoteRepo, policyRepo, promptRepo, llmService, ct);
+
+                var dailyAssistantMessage = new Message
+                {
+                    SessionId = session.Id,
+                    Role = "assistant",
+                    Content = summary
+                };
+
+                await sessionRepo.AddMessageAsync(dailyAssistantMessage, ct);
+
                 run.Status = "completed";
                 run.CompletedAt = DateTime.UtcNow;
                 run.Response = summary;
@@ -121,16 +152,6 @@ public class JobsCronHostedService : BackgroundService
                 await jobRepo.UpdateRunAsync(run, ct);
                 return;
             }
-
-            var session = new Session
-            {
-                OrganizationId = job.OrganizationId,
-                UserId = job.UserId,
-                Title = $"Job: {job.Name} ({now:yyyy-MM-dd HH:mm})",
-                IsJobRunSession = true
-            };
-
-            session = await sessionRepo.CreateAsync(session, ct);
 
             var userMessage = new Message
             {
@@ -240,18 +261,36 @@ public class JobsCronHostedService : BackgroundService
                 promptSettings?.DefaultModel,
                 ct);
 
-            var note = new HostNote
+            var usedToolForHost = response.ToolCalls.Any(call => IsUpdateHostNotesCallForHost(call, host.Id));
+            if (!usedToolForHost)
             {
-                OrganizationId = job.OrganizationId,
-                HostId = host.Id,
-                Content = response.Content.Trim(),
-                UpdatedByUserId = job.UserId
-            };
+                var note = new HostNote
+                {
+                    OrganizationId = job.OrganizationId,
+                    HostId = host.Id,
+                    Content = response.Content.Trim(),
+                    UpdatedByUserId = job.UserId
+                };
 
-            await hostNoteRepo.UpsertAsync(note, ct);
+                await hostNoteRepo.UpsertAsync(note, ct);
+            }
             updates.Add($"{host.Name}: updated");
         }
 
         return updates.Count == 0 ? "No notes updated." : string.Join("; ", updates);
+    }
+
+    private static bool IsUpdateHostNotesCallForHost(ToolCall call, Guid hostId)
+    {
+        if (!string.Equals(call.ToolName, "update_host_notes", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (!call.Parameters.TryGetValue("host_id", out var value))
+            return false;
+
+        if (value is JsonElement je)
+            value = je.GetString();
+
+        return Guid.TryParse(value?.ToString(), out var parsed) && parsed == hostId;
     }
 }
