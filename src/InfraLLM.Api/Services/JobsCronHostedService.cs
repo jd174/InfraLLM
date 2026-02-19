@@ -54,16 +54,27 @@ public class JobsCronHostedService : BackgroundService
         var jobs = await jobRepo.GetEnabledCronJobsAsync(ct);
         var now = DateTime.UtcNow;
 
+        _logger.LogInformation("Cron scheduler tick at {Now}. Enabled cron jobs: {Count}", now, jobs.Count);
+
         foreach (var job in jobs)
         {
             if (job.TriggerType != JobTriggerType.Cron || string.IsNullOrWhiteSpace(job.CronSchedule))
+            {
+                _logger.LogDebug("Cron job {JobId} skipped: missing schedule", job.Id);
                 continue;
+            }
 
             if (string.IsNullOrWhiteSpace(job.Prompt))
+            {
+                _logger.LogDebug("Cron job {JobId} skipped: missing prompt", job.Id);
                 continue;
+            }
 
             if (_runningJobs.Contains(job.Id))
+            {
+                _logger.LogDebug("Cron job {JobId} skipped: already running", job.Id);
                 continue;
+            }
 
             CronExpression? expression;
             try
@@ -79,7 +90,12 @@ public class JobsCronHostedService : BackgroundService
             var last = job.LastRunAt ?? now.AddMinutes(-1);
             var next = expression.GetNextOccurrence(last, _timezone);
             if (next == null || next > now)
+            {
+                _logger.LogDebug("Cron job {JobId} not due. Last={Last} Next={Next} Now={Now}", job.Id, last, next, now);
                 continue;
+            }
+
+            _logger.LogInformation("Cron job {JobId} due. Last={Last} Next={Next} Now={Now}", job.Id, last, next, now);
 
             _runningJobs.Add(job.Id);
             _ = RunJobAsync(job, jobRepo, sessionRepo, hostRepo, hostNoteRepo, policyRepo, promptRepo, llmService, now, ct)
@@ -99,29 +115,37 @@ public class JobsCronHostedService : BackgroundService
         DateTime now,
         CancellationToken ct)
     {
-        var session = new Session
-        {
-            OrganizationId = job.OrganizationId,
-            UserId = job.UserId,
-            Title = $"Job: {job.Name} ({now:yyyy-MM-dd HH:mm})",
-            IsJobRunSession = true
-        };
-
-        session = await sessionRepo.CreateAsync(session, ct);
-
-        var run = new JobRun
-        {
-            JobId = job.Id,
-            TriggeredBy = "cron",
-            Status = "received",
-            Payload = job.Prompt ?? string.Empty,
-            SessionId = session.Id
-        };
-
-        run = await jobRepo.AddRunAsync(run, ct);
-
+        JobRun? run = null;
+        Session? session = null;
         try
         {
+            if (string.IsNullOrWhiteSpace(job.UserId))
+            {
+                _logger.LogWarning("Cron job {JobId} has no user; skipping", job.Id);
+                return;
+            }
+
+            session = new Session
+            {
+                OrganizationId = job.OrganizationId,
+                UserId = job.UserId,
+                Title = $"Job: {job.Name} ({now:yyyy-MM-dd HH:mm})",
+                IsJobRunSession = true
+            };
+
+            session = await sessionRepo.CreateAsync(session, ct);
+
+            run = new JobRun
+            {
+                JobId = job.Id,
+                TriggeredBy = "cron",
+                Status = "received",
+                Payload = job.Prompt ?? string.Empty,
+                SessionId = session.Id
+            };
+
+            run = await jobRepo.AddRunAsync(run, ct);
+
             if (string.Equals(job.Name, DailyHostNotesJobName, StringComparison.OrdinalIgnoreCase))
             {
                 var dailyUserMessage = new Message
@@ -199,11 +223,15 @@ public class JobsCronHostedService : BackgroundService
         }
         catch (Exception ex)
         {
-            run.Status = "failed";
-            run.CompletedAt = DateTime.UtcNow;
-            run.Response = ex.Message;
-            await jobRepo.UpdateRunAsync(run, ct);
             _logger.LogError(ex, "Cron job {JobId} failed", job.Id);
+
+            if (run != null)
+            {
+                run.Status = "failed";
+                run.CompletedAt = DateTime.UtcNow;
+                run.Response = ex.Message;
+                await jobRepo.UpdateRunAsync(run, ct);
+            }
         }
     }
 
