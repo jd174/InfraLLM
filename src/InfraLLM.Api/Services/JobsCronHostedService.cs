@@ -130,11 +130,26 @@ public class JobsCronHostedService : BackgroundService
             job.LastRunAt = now;
 
             _runningJobs.Add(job.Id);
-            _ = RunJobAsync(job, jobRepo, sessionRepo, hostRepo, hostNoteRepo, policyRepo, promptRepo, llmService, now, ct)
-                .ContinueWith(_ => _runningJobs.Remove(job.Id),
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
+            var capturedJob = job;
+            _ = Task.Run(async () =>
+            {
+                using var jobScope = _serviceProvider.CreateScope();
+                var scopedJobRepo = jobScope.ServiceProvider.GetRequiredService<IJobRepository>();
+                var scopedSessionRepo = jobScope.ServiceProvider.GetRequiredService<ISessionRepository>();
+                var scopedHostRepo = jobScope.ServiceProvider.GetRequiredService<IHostRepository>();
+                var scopedHostNoteRepo = jobScope.ServiceProvider.GetRequiredService<IHostNoteRepository>();
+                var scopedPolicyRepo = jobScope.ServiceProvider.GetRequiredService<IPolicyRepository>();
+                var scopedPromptRepo = jobScope.ServiceProvider.GetRequiredService<IPromptSettingsRepository>();
+                var scopedLlmService = jobScope.ServiceProvider.GetRequiredService<ILlmService>();
+                try
+                {
+                    await RunJobAsync(capturedJob, scopedJobRepo, scopedSessionRepo, scopedHostRepo, scopedHostNoteRepo, scopedPolicyRepo, scopedPromptRepo, scopedLlmService, now, ct);
+                }
+                finally
+                {
+                    _runningJobs.Remove(capturedJob.Id);
+                }
+            }, CancellationToken.None);
         }
 
         if (dueCount > 0)
