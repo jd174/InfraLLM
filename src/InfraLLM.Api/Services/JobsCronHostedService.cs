@@ -11,17 +11,38 @@ public class JobsCronHostedService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<JobsCronHostedService> _logger;
-    private readonly TimeZoneInfo _timezone = TimeZoneInfo.Utc;
+    private readonly TimeZoneInfo _timezone;
     private readonly HashSet<Guid> _runningJobs = new();
 
     private const string DailyHostNotesJobName = "Daily Host Notes";
 
     public JobsCronHostedService(
         IServiceProvider serviceProvider,
-        ILogger<JobsCronHostedService> logger)
+        ILogger<JobsCronHostedService> logger,
+        IConfiguration configuration)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _timezone = ResolveTimeZone(configuration["Cron:TimeZone"], logger);
+    }
+
+    private static TimeZoneInfo ResolveTimeZone(string? timeZoneId, ILogger logger)
+    {
+        var requested = string.IsNullOrWhiteSpace(timeZoneId) ? "UTC" : timeZoneId;
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(requested);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            logger.LogWarning("Cron timezone '{TimeZone}' not found. Falling back to UTC.", requested);
+            return TimeZoneInfo.Utc;
+        }
+        catch (InvalidTimeZoneException)
+        {
+            logger.LogWarning("Cron timezone '{TimeZone}' is invalid. Falling back to UTC.", requested);
+            return TimeZoneInfo.Utc;
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -53,8 +74,9 @@ public class JobsCronHostedService : BackgroundService
 
         var jobs = await jobRepo.GetEnabledCronJobsAsync(ct);
         var now = DateTime.UtcNow;
+        var dueCount = 0;
 
-        _logger.LogInformation("Cron scheduler tick at {Now}. Enabled cron jobs: {Count}", now, jobs.Count);
+        _logger.LogDebug("Cron scheduler tick at {Now}. Enabled cron jobs: {Count}", now, jobs.Count);
 
         foreach (var job in jobs)
         {
@@ -83,23 +105,39 @@ public class JobsCronHostedService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Invalid cron schedule for job {JobId}", job.Id);
+                _logger.LogWarning(ex, "Invalid cron schedule for job {JobId}: {Cron}", job.Id, job.CronSchedule);
                 continue;
             }
 
             var last = job.LastRunAt ?? now.AddMinutes(-1);
             var next = expression.GetNextOccurrence(last, _timezone);
-            if (next == null || next > now)
+            if (next == null)
+            {
+                _logger.LogWarning("Cron job {JobId} has no next occurrence. Last={Last} Cron={Cron}", job.Id, last, job.CronSchedule);
+                continue;
+            }
+
+            if (next > now)
             {
                 _logger.LogDebug("Cron job {JobId} not due. Last={Last} Next={Next} Now={Now}", job.Id, last, next, now);
                 continue;
             }
 
+            dueCount++;
             _logger.LogInformation("Cron job {JobId} due. Last={Last} Next={Next} Now={Now}", job.Id, last, next, now);
 
             _runningJobs.Add(job.Id);
             _ = RunJobAsync(job, jobRepo, sessionRepo, hostRepo, hostNoteRepo, policyRepo, promptRepo, llmService, now, ct)
                 .ContinueWith(_ => _runningJobs.Remove(job.Id), ct);
+        }
+
+        if (dueCount > 0)
+        {
+            _logger.LogInformation("Cron scheduler dispatched {Count} job(s) at {Now}", dueCount, now);
+        }
+        else
+        {
+            _logger.LogDebug("Cron scheduler dispatched 0 jobs at {Now}", now);
         }
     }
 
