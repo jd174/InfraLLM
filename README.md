@@ -6,6 +6,8 @@ InfraLLM is an open source infrastructure assistant. Using plain english, sysadm
 
 It’s a chat-first workflow for ops work: policy enforcement, credential encryption, approvals, and streaming responses. You get the speed and knowledge of LLMs without surrendering control.
 
+InfraLLM can also run as an MCP server, so MCP-compatible clients (Claude Desktop, Cursor, etc.) can connect to it directly and safely interact with hosts configured in within.
+
 InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled jobs, webhook-triggered workflows, and repeatable incident response playbooks that can run across fleets with approvals and logging baked in.
 
 ![screenshot placeholder](docs/screenshot.png)
@@ -58,18 +60,20 @@ flowchart LR
 | Database | PostgreSQL 16 |
 | Cache/Sessions | Redis 7 |
 | Frontend | Next.js (standalone build) |
-| LLM | Anthropic Claude (via API key) |
+| LLM | Optional: Anthropic Claude (via API key) |
 | Container | Docker, nginx (all-in-one image) |
 
 ---
 
 ## Environment variables
 
-These are the key variables you'll need to configure. For local dev, everything has hardcoded defaults in `docker-compose.yml` — the only one you need to supply is `ANTHROPIC_API_KEY`.
+These are the key variables you'll need to configure. For local dev, everything has hardcoded defaults in `docker-compose.yml`.
+
+`ANTHROPIC_API_KEY` is optional. Set it only if you want InfraLLM to call Anthropic for chat/LLM responses. Without this key, you will need to use InfraLLM as an MCP server.
 
 | Variable | Description | Example |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key | `sk-ant-...` |
+| `ANTHROPIC_API_KEY` | (Optional) Your Anthropic API key (enables LLM chat) | `sk-ant-...` |
 | `ConnectionStrings__DefaultConnection` | Postgres connection string | `Host=postgres;Port=5432;Database=infrallm;Username=infrallm;Password=secret` |
 | `Jwt__Secret` | JWT signing secret (min 32 chars) | `some_long_random_secret_here` |
 | `Jwt__Issuer` | JWT issuer | `InfraLLM` |
@@ -78,6 +82,7 @@ These are the key variables you'll need to configure. For local dev, everything 
 | `Cors__Origins` | Allowed CORS origins | `http://localhost:3010` |
 | `NEXT_PUBLIC_API_URL` | Frontend API base URL | `http://localhost:5010` |
 | `Anthropic__MaxTokens` | Max tokens per LLM response | `8192` |
+| `REDIS_PASSWORD` | (Prod) Redis auth password (required for `docker-compose.prod.yml`) | `$(openssl rand -base64 32)` |
 
 For production, you'll want to generate real secrets for `Jwt__Secret` and `CredentialEncryption__MasterKey` — don't reuse the dev defaults.
 
@@ -107,10 +112,39 @@ If you're using Portainer, deploy `docker-compose.prod.yml` directly as a Stack.
 | Variable | Notes |
 |---|---|
 | `POSTGRES_PASSWORD` | Strong password for the database |
+| `REDIS_PASSWORD` | Strong password for Redis (required) |
 | `JWT_SECRET` | At least 32 random characters |
-| `ANTHROPIC_API_KEY` | From console.anthropic.com |
+| `ANTHROPIC_API_KEY` | (Optional) From console.anthropic.com |
 | `CREDENTIAL_MASTER_KEY` | `openssl rand -base64 32` |
 | `CORS_ORIGINS` | Your frontend's public URL |
+
+---
+
+## Use InfraLLM as an MCP server (Claude Desktop)
+
+InfraLLM can expose an MCP endpoint over SSE. You can connect to it from Claude Desktop using `mcp-remote`.
+
+1) Create an access token in the InfraLLM UI: **Access Tokens** page.
+
+2) Add an MCP server entry in your Claude Desktop config (replace placeholders):
+
+```json
+{
+	"mcpServers": {
+		"infrallm": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"mcp-remote",
+				"https://<infrallmUrl>/mcp/sse",
+				"--header",
+				"Authorization: Bearer <your-infrallm-access-token>"
+			]
+		}
+	}
+}
+```
+
 
 ### Separate containers
 
@@ -129,8 +163,8 @@ You'll need to configure `NEXT_PUBLIC_API_URL` to point the frontend at your bac
 | UI (dev) | `3010` | `3000` |
 | API (dev) | `5010` | `8080` |
 | All-in-one | `3010` | `80` |
-| Postgres | `5432` | `5432` |
-| Redis | `6379` | `6379` |
+| Postgres | `5432` (dev only) | `5432` |
+| Redis | `6379` (dev only) | `6379` |
 
 ---
 

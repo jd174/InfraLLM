@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -112,9 +113,8 @@ function TokenRevealCard({ token, onDismiss }: { token: CreatedToken; onDismiss:
   );
 }
 
-function McpInstructions({ tokens }: { tokens: AccessToken[] }) {
+function McpInstructions() {
   const [copied, setCopied] = useState(false);
-  const activeToken = tokens.find((t) => t.isActive);
 
   const baseUrl =
     typeof window !== "undefined"
@@ -122,22 +122,6 @@ function McpInstructions({ tokens }: { tokens: AccessToken[] }) {
       : "https://your-infra-llm-instance";
 
   const mcpUrl = `${baseUrl}/mcp/messages`;
-
-  const configSnippet = JSON.stringify(
-    {
-      mcpServers: {
-        infra: {
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/client-http", mcpUrl],
-          env: {
-            API_KEY: activeToken ? "<your-access-token>" : "<create an access token first>",
-          },
-        },
-      },
-    },
-    null,
-    2
-  );
 
   const handleCopyUrl = async () => {
     try {
@@ -219,9 +203,9 @@ function McpInstructions({ tokens }: { tokens: AccessToken[] }) {
           </div>
           <p className="text-xs text-muted-foreground mb-2">
             You can also add InfraLLM as an MCP server within this app itself — go to{" "}
-            <a href="/mcp-servers" className="underline hover:text-foreground">
+            <Link href="/mcp-servers" className="underline hover:text-foreground">
               MCP Servers
-            </a>{" "}
+            </Link>{" "}
             and create an HTTP server with the URL above and your access token as the API key.
           </p>
         </div>
@@ -426,7 +410,7 @@ export default function AccessTokensPage() {
       )}
 
       {/* MCP instructions */}
-      <McpInstructions tokens={tokens} />
+      <McpInstructions />
     </div>
   );
 }

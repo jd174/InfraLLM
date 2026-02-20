@@ -54,13 +54,13 @@ export function useJobs() {
     setJobs((prev) => prev.filter((j) => j.id !== id));
   };
 
-  const fetchRuns = async (id: string) => {
+  const fetchRuns = useCallback(async (id: string) => {
     return await api.get<JobRun[]>(`/api/jobs/${id}/runs`);
-  };
+  }, []);
 
-  const fetchRecentRuns = async (limit = 50) => {
+  const fetchRecentRuns = useCallback(async (limit = 50) => {
     return await api.get<JobRunSummary[]>(`/api/jobs/runs?limit=${limit}`);
-  };
+  }, []);
 
   return { jobs, loading, error, fetchJobs, createJob, updateJob, deleteJob, fetchRuns, fetchRecentRuns };
 }
