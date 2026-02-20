@@ -27,6 +27,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<CommandExecution> CommandExecutions => Set<CommandExecution>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<McpServer> McpServers => Set<McpServer>();
+    public DbSet<AccessToken> AccessTokens => Set<AccessToken>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -238,6 +239,19 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                 .Metadata.SetValueComparer(stringDictComparer);
             e.HasIndex(x => x.OrganizationId);
             e.HasIndex(x => new { x.OrganizationId, x.IsEnabled });
+        });
+
+        builder.Entity<AccessToken>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(255).IsRequired();
+            e.Property(x => x.TokenHash).HasMaxLength(64).IsRequired(); // SHA-256 hex = 64 chars
+            e.Property(x => x.UserId).HasMaxLength(255).IsRequired();
+            e.Property(x => x.IsActive).HasDefaultValue(true);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => new { x.UserId, x.IsActive });
+            e.HasIndex(x => x.OrganizationId);
         });
     }
 }

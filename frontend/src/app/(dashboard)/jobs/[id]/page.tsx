@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { useFeatures } from "@/hooks/useFeatures";
 import { useJobs } from "@/hooks/useJobs";
 import type { Job, JobRun, UpdateJobRequest } from "@/types";
 import { formatDate } from "@/lib/utils";
@@ -20,6 +21,25 @@ const runStatusVariant: Record<string, "success" | "danger" | "warning" | "neutr
 };
 
 export default function JobDetailPage() {
+  const { chatEnabled } = useFeatures();
+
+  if (!chatEnabled) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center">
+        <div className="space-y-3 max-w-sm">
+          <h2 className="text-xl font-semibold text-foreground">Jobs unavailable</h2>
+          <p className="text-sm text-muted-foreground">
+            Jobs require an Anthropic API key to be configured on the server.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <JobDetailPageInner />;
+}
+
+function JobDetailPageInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { updateJob, deleteJob, fetchRuns } = useJobs();

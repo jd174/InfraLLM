@@ -22,6 +22,7 @@ public class SessionsController : ControllerBase
     private readonly IHostNoteRepository _hostNoteRepo;
     private readonly IHubContext<ChatHub> _chatHub;
     private readonly IChatTaskManager _chatTasks;
+    private readonly IConfiguration _config;
 
     public SessionsController(
         ISessionRepository sessionRepo,
@@ -31,7 +32,8 @@ public class SessionsController : ControllerBase
         IPromptSettingsRepository promptRepo,
         IHostNoteRepository hostNoteRepo,
         IHubContext<ChatHub> chatHub,
-        IChatTaskManager chatTasks)
+        IChatTaskManager chatTasks,
+        IConfiguration config)
     {
         _sessionRepo = sessionRepo;
         _llmService = llmService;
@@ -41,6 +43,7 @@ public class SessionsController : ControllerBase
         _hostNoteRepo = hostNoteRepo;
         _chatHub = chatHub;
         _chatTasks = chatTasks;
+        _config = config;
     }
 
     [HttpGet]
@@ -118,6 +121,9 @@ public class SessionsController : ControllerBase
     [HttpPost("{id:guid}/messages")]
     public async Task<IActionResult> SendMessage(Guid id, [FromBody] SendMessageRequest request, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(_config["Anthropic:ApiKey"]))
+            return StatusCode(503, new { error = "Chat is not available: the Anthropic API key is not configured on this server." });
+
         if (string.IsNullOrWhiteSpace(request.Content))
             return BadRequest(new { error = "Message content is required" });
             

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useFeatures } from "@/hooks/useFeatures";
 import { useJobs } from "@/hooks/useJobs";
 import type { CreateJobRequest, JobTriggerType } from "@/types";
 import { Button } from "@/components/ui/Button";
@@ -15,6 +16,25 @@ import { Label } from "@/components/ui/Label";
 import { PlusIcon, XIcon, TrashIcon } from "@/components/ui/Icons";
 
 export default function JobsPage() {
+  const { chatEnabled } = useFeatures();
+
+  if (!chatEnabled) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center">
+        <div className="space-y-3 max-w-sm">
+          <h2 className="text-xl font-semibold text-foreground">Jobs unavailable</h2>
+          <p className="text-sm text-muted-foreground">
+            Jobs require an Anthropic API key to be configured on the server.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <JobsPageInner />;
+}
+
+function JobsPageInner() {
   const { jobs, loading, error, createJob, deleteJob } = useJobs();
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);

@@ -7,6 +7,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { logout } from "@/lib/auth";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useFeatures } from "@/hooks/useFeatures";
 import {
   ChatIcon,
   JobRunsIcon,
@@ -22,18 +23,22 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   SettingsIcon,
+  TokenIcon,
 } from "@/components/ui/Icons";
 
-const navItems = [
-  { href: "/chat", label: "Chat", Icon: ChatIcon },
-  { href: "/job-runs", label: "Job Runs", Icon: JobRunsIcon },
-  { href: "/jobs", label: "Jobs", Icon: JobsIcon },
+const BASE_NAV_ITEMS = [
   { href: "/hosts", label: "Hosts", Icon: HostsIcon },
   // { href: "/mcp-servers", label: "MCP Servers", Icon: McpIcon },
   { href: "/credentials", label: "Credentials", Icon: CredentialsIcon },
   { href: "/policies", label: "Policies", Icon: PoliciesIcon },
   { href: "/audit", label: "Audit Log", Icon: AuditIcon },
+  { href: "/access-tokens", label: "Access Tokens", Icon: TokenIcon },
   { href: "/settings", label: "Settings", Icon: SettingsIcon },
+];
+
+const LLM_NAV_ITEMS = [
+  { href: "/job-runs", label: "Job Runs", Icon: JobRunsIcon },
+  { href: "/jobs", label: "Jobs", Icon: JobsIcon },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -41,7 +46,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const { user, isAuthenticated } = useAuthStore();
   const { sidebarOpen, toggleSidebar } = useUIStore();
+  const { chatEnabled } = useFeatures();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const navItems = chatEnabled
+    ? [{ href: "/chat", label: "Chat", Icon: ChatIcon }, ...LLM_NAV_ITEMS, ...BASE_NAV_ITEMS]
+    : BASE_NAV_ITEMS;
 
   useEffect(() => {
     if (!isAuthenticated) router.push("/login");
