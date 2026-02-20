@@ -15,20 +15,15 @@ public class HostsController : ControllerBase
     private readonly IHostRepository _hostRepo;
     private readonly ISshConnectionPool _connectionPool;
     private readonly IAuditLogger _auditLogger;
-    private readonly IJobRepository _jobRepo;
     private readonly IHostNoteRepository _hostNoteRepo;
     private readonly IPolicyRepository _policyRepo;
     private readonly IPromptSettingsRepository _promptRepo;
     private readonly ILlmService _llmService;
 
-    private const string DailyHostNotesJobName = "Daily Host Notes";
-    private const string DailyHostNotesCron = "0 2 * * *";
-
     public HostsController(
         IHostRepository hostRepo,
         ISshConnectionPool connectionPool,
         IAuditLogger auditLogger,
-        IJobRepository jobRepo,
         IHostNoteRepository hostNoteRepo,
         IPolicyRepository policyRepo,
         IPromptSettingsRepository promptRepo,
@@ -37,7 +32,6 @@ public class HostsController : ControllerBase
         _hostRepo = hostRepo;
         _connectionPool = connectionPool;
         _auditLogger = auditLogger;
-        _jobRepo = jobRepo;
         _hostNoteRepo = hostNoteRepo;
         _policyRepo = policyRepo;
         _promptRepo = promptRepo;
@@ -151,7 +145,6 @@ public class HostsController : ControllerBase
         };
 
         var created = await _hostRepo.CreateAsync(host, ct);
-        await EnsureDailyHostNotesJobAsync(host.OrganizationId, GetUserId(), ct);
         await _auditLogger.LogEventAsync(host.OrganizationId, GetUserId(), AuditEventType.HostAdded, $"Host created: {host.Name}", ct);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
@@ -229,27 +222,6 @@ public class HostsController : ControllerBase
     private string GetUserId()
         => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
            ?? throw new UnauthorizedAccessException();
-
-    private async Task EnsureDailyHostNotesJobAsync(Guid organizationId, string userId, CancellationToken ct)
-    {
-        var existing = await _jobRepo.GetByOrganizationAndNameAsync(organizationId, DailyHostNotesJobName, ct);
-        if (existing != null) return;
-
-        var job = new Job
-        {
-            OrganizationId = organizationId,
-            UserId = userId,
-            Name = DailyHostNotesJobName,
-            Description = "Daily LLM-maintained notes per host",
-            TriggerType = JobTriggerType.Cron,
-            CronSchedule = DailyHostNotesCron,
-            AutoRunLlm = true,
-            IsEnabled = true,
-            Prompt = "Update and maintain concise operational notes for each host based on its role, environment, and recent changes."
-        };
-
-        await _jobRepo.CreateAsync(job, ct);
-    }
 
     private static List<Guid> ParseHostIds(string? hostIds)
     {
