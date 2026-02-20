@@ -9,6 +9,7 @@ using InfraLLM.Api.Hubs;
 using InfraLLM.Api.Middleware;
 using InfraLLM.Api.Services;
 using InfraLLM.Core.Interfaces;
+using InfraLLM.Core.Models;
 using InfraLLM.Infrastructure.Data;
 using InfraLLM.Infrastructure.Data.Repositories;
 using InfraLLM.Infrastructure.Services;
