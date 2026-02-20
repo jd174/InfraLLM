@@ -22,6 +22,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   SettingsIcon,
+  TokenIcon,
 } from "@/components/ui/Icons";
 
 const navItems = [
@@ -33,6 +34,7 @@ const navItems = [
   { href: "/credentials", label: "Credentials", Icon: CredentialsIcon },
   { href: "/policies", label: "Policies", Icon: PoliciesIcon },
   { href: "/audit", label: "Audit Log", Icon: AuditIcon },
+  { href: "/access-tokens", label: "Access Tokens", Icon: TokenIcon },
   { href: "/settings", label: "Settings", Icon: SettingsIcon },
 ];
 

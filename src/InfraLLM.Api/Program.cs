@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
+using InfraLLM.Api.Authentication;
 using InfraLLM.Api.Hubs;
 using InfraLLM.Api.Middleware;
 using InfraLLM.Api.Services;
@@ -58,11 +59,37 @@ if (!builder.Environment.IsDevelopment()
 
 builder.Services.Configure<CredentialEncryptionOptions>(builder.Configuration.GetSection("CredentialEncryption"));
 
+// Combined authentication: JWT for browser sessions, AccessToken for API/MCP clients.
+// A policy scheme inspects the incoming request to route to the correct handler.
+const string combinedScheme = "JwtOrAccessToken";
+
 builder.Services.AddAuthentication(options =>
     {
-        options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultScheme = combinedScheme;
+        options.DefaultAuthenticateScheme = combinedScheme;
         options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddPolicyScheme(combinedScheme, "JWT or Access Token", opts =>
+    {
+        opts.ForwardDefaultSelector = ctx =>
+        {
+            // X-API-Key header → AccessToken scheme
+            if (ctx.Request.Headers.ContainsKey("X-API-Key"))
+                return AccessTokenAuthHandler.SchemeName;
+
+            // ?api_key=... query string → AccessToken scheme
+            if (ctx.Request.Query.ContainsKey("api_key"))
+                return AccessTokenAuthHandler.SchemeName;
+
+            // Authorization: Bearer infra_... → AccessToken scheme
+            var auth = ctx.Request.Headers.Authorization.FirstOrDefault();
+            if (!string.IsNullOrEmpty(auth) &&
+                auth.StartsWith("Bearer infra_", StringComparison.OrdinalIgnoreCase))
+                return AccessTokenAuthHandler.SchemeName;
+
+            // Everything else (JWT, SignalR access_token) → JWT scheme
+            return JwtBearerDefaults.AuthenticationScheme;
+        };
     })
     .AddJwtBearer(options =>
     {
@@ -91,7 +118,9 @@ builder.Services.AddAuthentication(options =>
                 return Task.CompletedTask;
             }
         };
-    });
+    })
+    .AddScheme<AccessTokenAuthOptions, AccessTokenAuthHandler>(
+        AccessTokenAuthHandler.SchemeName, _ => { });
 
 // Repositories
 builder.Services.AddScoped<IHostRepository, HostRepository>();
