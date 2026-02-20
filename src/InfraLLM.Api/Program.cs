@@ -219,35 +219,6 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await db.Database.MigrateAsync();
-
-    var hostRepo = scope.ServiceProvider.GetRequiredService<IHostRepository>();
-    var jobRepo = scope.ServiceProvider.GetRequiredService<IJobRepository>();
-    var orgIds = await hostRepo.GetOrganizationIdsWithHostsAsync();
-
-    foreach (var orgId in orgIds)
-    {
-        var existing = await jobRepo.GetByOrganizationAndNameAsync(orgId, "Daily Host Notes");
-        if (existing != null) continue;
-
-        var hosts = await hostRepo.GetByOrganizationAsync(orgId);
-        var createdBy = hosts.FirstOrDefault()?.CreatedBy;
-        if (string.IsNullOrWhiteSpace(createdBy)) continue;
-
-        var job = new Job
-        {
-            OrganizationId = orgId,
-            UserId = createdBy,
-            Name = "Daily Host Notes",
-            Description = "Daily LLM-maintained notes per host",
-            TriggerType = InfraLLM.Core.Enums.JobTriggerType.Cron,
-            CronSchedule = "0 2 * * *",
-            AutoRunLlm = true,
-            IsEnabled = true,
-            Prompt = "Update and maintain concise operational notes for each host based on its role, environment, and recent changes."
-        };
-
-        await jobRepo.CreateAsync(job);
-    }
 }
 
 app.Run();
