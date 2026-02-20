@@ -53,3 +53,4 @@ export const SettingsIcon = icon("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z|M19.4 15a1
 export const CheckIcon = icon("M20 6 9 17l-5-5");
 export const ServerIcon = icon("M2 8a4 4 0 0 1 4-4h12a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z|M6 12h.01|M10 12h.01");
 export const CopyIcon = icon("M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2z|M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 0 2 2v1");
+export const TokenIcon = icon("M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 0 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 0 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z|M16.5 7.5a1 1 0 1 0 0-2 1 1 0 0 0 0 2z");
