@@ -2,12 +2,32 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useFeatures } from "@/hooks/useFeatures";
 import { useJobs, type JobRunSummary } from "@/hooks/useJobs";
 import { formatRelativeTime } from "@/lib/utils";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
 export default function JobRunsPage() {
+  const { chatEnabled } = useFeatures();
+
+  if (!chatEnabled) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center">
+        <div className="space-y-3 max-w-sm">
+          <h2 className="text-xl font-semibold text-foreground">Job runs unavailable</h2>
+          <p className="text-sm text-muted-foreground">
+            Job runs require an Anthropic API key to be configured on the server.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <JobRunsPageInner />;
+}
+
+function JobRunsPageInner() {
   const { fetchRecentRuns } = useJobs();
   const [runs, setRuns] = useState<JobRunSummary[]>([]);
   const [loading, setLoading] = useState(true);

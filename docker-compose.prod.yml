@@ -18,8 +18,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     restart: unless-stopped
 
   postgres:
@@ -38,21 +36,5 @@ services:
       retries: 5
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: infrallm-redis
-    environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required in production}
-    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\""]
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
 volumes:
   pgdata:
-  redisdata:

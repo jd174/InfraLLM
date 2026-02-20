@@ -27,8 +27,6 @@ import {
 } from "@/components/ui/Icons";
 
 const BASE_NAV_ITEMS = [
-  { href: "/job-runs", label: "Job Runs", Icon: JobRunsIcon },
-  { href: "/jobs", label: "Jobs", Icon: JobsIcon },
   { href: "/hosts", label: "Hosts", Icon: HostsIcon },
   // { href: "/mcp-servers", label: "MCP Servers", Icon: McpIcon },
   { href: "/credentials", label: "Credentials", Icon: CredentialsIcon },
@@ -36,6 +34,11 @@ const BASE_NAV_ITEMS = [
   { href: "/audit", label: "Audit Log", Icon: AuditIcon },
   { href: "/access-tokens", label: "Access Tokens", Icon: TokenIcon },
   { href: "/settings", label: "Settings", Icon: SettingsIcon },
+];
+
+const LLM_NAV_ITEMS = [
+  { href: "/job-runs", label: "Job Runs", Icon: JobRunsIcon },
+  { href: "/jobs", label: "Jobs", Icon: JobsIcon },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -47,7 +50,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navItems = chatEnabled
-    ? [{ href: "/chat", label: "Chat", Icon: ChatIcon }, ...BASE_NAV_ITEMS]
+    ? [{ href: "/chat", label: "Chat", Icon: ChatIcon }, ...LLM_NAV_ITEMS, ...BASE_NAV_ITEMS]
     : BASE_NAV_ITEMS;
 
   useEffect(() => {

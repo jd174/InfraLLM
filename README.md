@@ -23,6 +23,7 @@ InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled
 
 ## What it does
 
+- **AI Gateway to your infrastructure** - Acts as the control plane between AI and your infrastructure. Limits what commands AI has access to on each host.
 - **Natural language SSH** — describe a task, InfraLLM plans and executes solutions.
 - **Host management** — add servers via ssh credentials (Encrypted at rest!)
 - **Jobs + webhooks** — trigger automated incident workflows from monitoring alerts, ticketing systems, or internal tooling
@@ -58,7 +59,6 @@ flowchart LR
 |---|---|
 | Backend | ASP.NET Core (.NET 10), SignalR, Entity Framework Core |
 | Database | PostgreSQL 16 |
-| Cache/Sessions | Redis 7 |
 | Frontend | Next.js (standalone build) |
 | LLM | Optional: Anthropic Claude (via API key) |
 | Container | Docker, nginx (all-in-one image) |
@@ -82,7 +82,6 @@ These are the key variables you'll need to configure. For local dev, everything 
 | `Cors__Origins` | Allowed CORS origins | `http://localhost:3010` |
 | `NEXT_PUBLIC_API_URL` | Frontend API base URL | `http://localhost:5010` |
 | `Anthropic__MaxTokens` | Max tokens per LLM response | `8192` |
-| `REDIS_PASSWORD` | (Prod) Redis auth password (required for `docker-compose.prod.yml`) | `$(openssl rand -base64 32)` |
 
 For production, you'll want to generate real secrets for `Jwt__Secret` and `CredentialEncryption__MasterKey` — don't reuse the dev defaults.
 
@@ -103,7 +102,7 @@ Ports inside the container:
 - `8080` — backend (internal)
 - `3000` — frontend (internal)
 
-A sample production compose file is in `docker-compose.prod.yml`. Use this file to get started quickly. It runs the all-in-one app with Postgres and Redis. Make sure to update the JWT key. It need to be at least 32 characters for the app to run.
+A sample production compose file is in `docker-compose.prod.yml`. Use this file to get started quickly. It runs the all-in-one app with Postgres. Make sure to update the JWT key. It need to be at least 32 characters for the app to run.
 
 ### Portainer
 
@@ -112,7 +111,6 @@ If you're using Portainer, deploy `docker-compose.prod.yml` directly as a Stack.
 | Variable | Notes |
 |---|---|
 | `POSTGRES_PASSWORD` | Strong password for the database |
-| `REDIS_PASSWORD` | Strong password for Redis (required) |
 | `JWT_SECRET` | At least 32 random characters |
 | `ANTHROPIC_API_KEY` | (Optional) From console.anthropic.com |
 | `CREDENTIAL_MASTER_KEY` | `openssl rand -base64 32` |
@@ -164,7 +162,6 @@ You'll need to configure `NEXT_PUBLIC_API_URL` to point the frontend at your bac
 | API (dev) | `5010` | `8080` |
 | All-in-one | `3010` | `80` |
 | Postgres | `5432` (dev only) | `5432` |
-| Redis | `6379` (dev only) | `6379` |
 
 ---
 
