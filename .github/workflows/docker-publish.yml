@@ -53,6 +53,7 @@ jobs:
           context: .
           file: Dockerfile.allinone
           push: ${{ github.event_name != 'pull_request' }}
+          no-cache: true
           build-args: |
             ASPNETCORE_ENVIRONMENT=${{ github.ref_name == 'uat' && 'Staging' || 'Production' }}
           tags: ${{ steps.meta.outputs.tags }}
