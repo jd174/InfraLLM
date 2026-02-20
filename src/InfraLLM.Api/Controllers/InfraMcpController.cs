@@ -206,6 +206,13 @@ public class InfraMcpController : ControllerBase
             "test_host_connection" => await TestHostConnectionAsync(orgId, args, ct),
             "list_policies" => await ListPoliciesAsync(orgId, ct),
             "get_audit_logs" => await GetAuditLogsAsync(orgId, args, ct),
+            "tail_logs" => await TailLogsAsync(userId, orgId, args, ct),
+            "update_host_notes" => await UpdateHostNotesAsync(userId, orgId, args, ct),
+            "read_file" => await ReadFileAsync(userId, orgId, args, ct),
+            "check_service_status" => await CheckServiceStatusAsync(userId, orgId, args, ct),
+            "list_containers" => await ListContainersAsync(userId, orgId, args, ct),
+            "check_container_status" => await CheckContainerStatusAsync(userId, orgId, args, ct),
+            "write_file" => await WriteFileAsync(userId, orgId, args, ct),
             _ => $"Unknown tool: {name}"
         };
 
@@ -401,6 +408,217 @@ public class InfraMcpController : ControllerBase
         return sb.ToString().Trim();
     }
 
+    private async Task<string> TailLogsAsync(string userId, Guid orgId, JsonObject args, CancellationToken ct)
+    {
+        var hostIdStr = args["host_id"]?.GetValue<string>();
+        if (!Guid.TryParse(hostIdStr, out var hostId))
+            return "Error: host_id must be a valid GUID.";
+
+        var source = args["source"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(source))
+            return "Error: source is required.";
+
+        var lines = args["lines"]?.GetValue<int>() ?? 50;
+        lines = Math.Clamp(lines, 1, 1000);
+        var sourceType = args["source_type"]?.GetValue<string>() ?? "file";
+
+        var host = await _hosts.GetByIdAsync(hostId, ct);
+        if (host == null || host.OrganizationId != orgId)
+            return $"Error: host {hostId} not found.";
+
+        var command = sourceType == "journald"
+            ? $"journalctl -u {source} -n {lines} --no-pager"
+            : $"tail -n {lines} {source}";
+
+        try
+        {
+            var result = await _commander.ExecuteAsync(userId, hostId, command, false, ct);
+            if (result.ExitCode != 0)
+                return $"Error reading logs: {result.StandardError}";
+            return result.StandardOutput ?? "(empty)";
+        }
+        catch (UnauthorizedAccessException ex) { return $"Policy denied: {ex.Message}"; }
+        catch (Exception ex) { return $"Error: {ex.Message}"; }
+    }
+
+    private async Task<string> UpdateHostNotesAsync(string userId, Guid orgId, JsonObject args, CancellationToken ct)
+    {
+        var hostIdStr = args["host_id"]?.GetValue<string>();
+        if (!Guid.TryParse(hostIdStr, out var hostId))
+            return "Error: host_id must be a valid GUID.";
+
+        var content = args["content"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(content))
+            return "Error: content is required.";
+
+        var host = await _hosts.GetByIdAsync(hostId, ct);
+        if (host == null || host.OrganizationId != orgId)
+            return $"Error: host {hostId} not found.";
+
+        var note = new HostNote
+        {
+            OrganizationId = orgId,
+            HostId = hostId,
+            Content = content.Trim(),
+            UpdatedByUserId = userId
+        };
+        await _hostNotes.UpsertAsync(note, ct);
+        return $"Updated host notes for **{host.Name}** ({host.Id}).";
+    }
+
+    private async Task<string> ReadFileAsync(string userId, Guid orgId, JsonObject args, CancellationToken ct)
+    {
+        var hostIdStr = args["host_id"]?.GetValue<string>();
+        if (!Guid.TryParse(hostIdStr, out var hostId))
+            return "Error: host_id must be a valid GUID.";
+
+        var filePath = args["file_path"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(filePath))
+            return "Error: file_path is required.";
+
+        var host = await _hosts.GetByIdAsync(hostId, ct);
+        if (host == null || host.OrganizationId != orgId)
+            return $"Error: host {hostId} not found.";
+
+        try
+        {
+            var result = await _commander.ExecuteAsync(userId, hostId, $"cat {filePath}", false, ct);
+            if (result.ExitCode != 0)
+                return $"Error reading file: {result.StandardError}";
+            return result.StandardOutput ?? "(empty)";
+        }
+        catch (UnauthorizedAccessException ex) { return $"Policy denied: {ex.Message}"; }
+        catch (Exception ex) { return $"Error: {ex.Message}"; }
+    }
+
+    private async Task<string> CheckServiceStatusAsync(string userId, Guid orgId, JsonObject args, CancellationToken ct)
+    {
+        var hostIdStr = args["host_id"]?.GetValue<string>();
+        if (!Guid.TryParse(hostIdStr, out var hostId))
+            return "Error: host_id must be a valid GUID.";
+
+        var serviceName = args["service_name"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(serviceName))
+            return "Error: service_name is required.";
+
+        var host = await _hosts.GetByIdAsync(hostId, ct);
+        if (host == null || host.OrganizationId != orgId)
+            return $"Error: host {hostId} not found.";
+
+        try
+        {
+            var result = await _commander.ExecuteAsync(userId, hostId, $"systemctl status {serviceName}", false, ct);
+            return result.StandardOutput ?? result.StandardError ?? "(no output)";
+        }
+        catch (UnauthorizedAccessException ex) { return $"Policy denied: {ex.Message}"; }
+        catch (Exception ex) { return $"Error: {ex.Message}"; }
+    }
+
+    private async Task<string> ListContainersAsync(string userId, Guid orgId, JsonObject args, CancellationToken ct)
+    {
+        var hostIdStr = args["host_id"]?.GetValue<string>();
+        if (!Guid.TryParse(hostIdStr, out var hostId))
+            return "Error: host_id must be a valid GUID.";
+
+        var all = args["all"]?.GetValue<bool>() ?? false;
+
+        var host = await _hosts.GetByIdAsync(hostId, ct);
+        if (host == null || host.OrganizationId != orgId)
+            return $"Error: host {hostId} not found.";
+
+        var command = all
+            ? "docker ps -a --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}'"
+            : "docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}'";
+
+        try
+        {
+            var result = await _commander.ExecuteAsync(userId, hostId, command, false, ct);
+            if (result.ExitCode != 0)
+                return $"Error listing containers: {result.StandardError}";
+            return result.StandardOutput ?? "(no containers)";
+        }
+        catch (UnauthorizedAccessException ex) { return $"Policy denied: {ex.Message}"; }
+        catch (Exception ex) { return $"Error: {ex.Message}"; }
+    }
+
+    private async Task<string> CheckContainerStatusAsync(string userId, Guid orgId, JsonObject args, CancellationToken ct)
+    {
+        var hostIdStr = args["host_id"]?.GetValue<string>();
+        if (!Guid.TryParse(hostIdStr, out var hostId))
+            return "Error: host_id must be a valid GUID.";
+
+        var containerName = args["container_name"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(containerName))
+            return "Error: container_name is required.";
+
+        var logLines = args["log_lines"]?.GetValue<int>() ?? 20;
+        logLines = Math.Clamp(logLines, 1, 500);
+
+        var host = await _hosts.GetByIdAsync(hostId, ct);
+        if (host == null || host.OrganizationId != orgId)
+            return $"Error: host {hostId} not found.";
+
+        var command = $"docker inspect --format='State: {{{{.State.Status}}}} | Started: {{{{.State.StartedAt}}}}' {containerName} 2>&1 && echo '--- Recent Logs ---' && docker logs --tail {logLines} {containerName} 2>&1";
+
+        try
+        {
+            var result = await _commander.ExecuteAsync(userId, hostId, command, false, ct);
+            if (result.ExitCode != 0)
+                return $"Error checking container: {result.StandardError}";
+            return result.StandardOutput ?? "(no output)";
+        }
+        catch (UnauthorizedAccessException ex) { return $"Policy denied: {ex.Message}"; }
+        catch (Exception ex) { return $"Error: {ex.Message}"; }
+    }
+
+    private async Task<string> WriteFileAsync(string userId, Guid orgId, JsonObject args, CancellationToken ct)
+    {
+        var hostIdStr = args["host_id"]?.GetValue<string>();
+        if (!Guid.TryParse(hostIdStr, out var hostId))
+            return "Error: host_id must be a valid GUID.";
+
+        var filePath = args["file_path"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(filePath))
+            return "Error: file_path is required.";
+
+        var content = args["content"]?.GetValue<string>();
+        if (content == null)
+            return "Error: content is required.";
+
+        var backup = args["backup"]?.GetValue<bool>() ?? true;
+
+        var host = await _hosts.GetByIdAsync(hostId, ct);
+        if (host == null || host.OrganizationId != orgId)
+            return $"Error: host {hostId} not found.";
+
+        try
+        {
+            var sb = new StringBuilder();
+
+            if (backup)
+            {
+                var backupResult = await _commander.ExecuteAsync(
+                    userId, hostId,
+                    $"cp {filePath} {filePath}.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true",
+                    false, ct);
+                if (backupResult.ExitCode == 0)
+                    sb.AppendLine($"Backup created: {filePath}.bak.<timestamp>");
+            }
+
+            var escapedContent = content.Replace("\\", "\\\\").Replace("'", "\\'");
+            var writeResult = await _commander.ExecuteAsync(
+                userId, hostId, $"printf '%s' '{escapedContent}' > {filePath}", false, ct);
+
+            if (writeResult.ExitCode != 0)
+                return $"{sb}Error writing file: {writeResult.StandardError}";
+
+            sb.AppendLine($"Successfully wrote {content.Length} characters to {filePath}");
+            return sb.ToString().TrimEnd();
+        }
+        catch (UnauthorizedAccessException ex) { return $"Policy denied: {ex.Message}"; }
+        catch (Exception ex) { return $"Error: {ex.Message}"; }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
@@ -494,6 +712,74 @@ public class InfraMcpController : ControllerBase
                 ["host_id"] = Prop("string", "Filter to a specific host GUID (optional)"),
                 ["limit"] = Prop("integer", "Maximum entries to return (1-100, default 20)")
             })),
+
+        ("tail_logs", BuildSchema("tail_logs",
+            "Read the last N lines of a log file or systemd journal on a host. Use source_type='file' for log files (default), 'journald' for systemd service logs.",
+            new Dictionary<string, JsonObject>
+            {
+                ["host_id"] = Prop("string", "The host GUID"),
+                ["source"] = Prop("string", "File path (e.g. /var/log/syslog) or systemd service name (e.g. nginx)"),
+                ["lines"] = Prop("integer", "Number of lines to return (default 50, max 1000)"),
+                ["source_type"] = Prop("string", "Either 'file' (default) or 'journald'")
+            },
+            required: ["host_id", "source"])),
+
+        ("update_host_notes", BuildSchema("update_host_notes",
+            "Create or replace the operational notes stored for a host. Use this to record findings, runbooks, or context about a host.",
+            new Dictionary<string, JsonObject>
+            {
+                ["host_id"] = Prop("string", "The host GUID"),
+                ["content"] = Prop("string", "The updated notes content (markdown supported)")
+            },
+            required: ["host_id", "content"])),
+
+        ("read_file", BuildSchema("read_file",
+            "Read the full contents of a file on a managed host via SSH.",
+            new Dictionary<string, JsonObject>
+            {
+                ["host_id"] = Prop("string", "The host GUID"),
+                ["file_path"] = Prop("string", "Absolute path to the file to read")
+            },
+            required: ["host_id", "file_path"])),
+
+        ("check_service_status", BuildSchema("check_service_status",
+            "Check the status of a systemd service on a managed host (runs systemctl status).",
+            new Dictionary<string, JsonObject>
+            {
+                ["host_id"] = Prop("string", "The host GUID"),
+                ["service_name"] = Prop("string", "Name of the systemd service (e.g. nginx, docker, sshd)")
+            },
+            required: ["host_id", "service_name"])),
+
+        ("list_containers", BuildSchema("list_containers",
+            "List Docker containers on a managed host. Shows name, image, status, and ports.",
+            new Dictionary<string, JsonObject>
+            {
+                ["host_id"] = Prop("string", "The host GUID"),
+                ["all"] = Prop("boolean", "If true, include stopped containers (default false)")
+            },
+            required: ["host_id"])),
+
+        ("check_container_status", BuildSchema("check_container_status",
+            "Get the current state and recent log output for a specific Docker container.",
+            new Dictionary<string, JsonObject>
+            {
+                ["host_id"] = Prop("string", "The host GUID"),
+                ["container_name"] = Prop("string", "Name or ID of the Docker container"),
+                ["log_lines"] = Prop("integer", "Number of recent log lines to return (default 20, max 500)")
+            },
+            required: ["host_id", "container_name"])),
+
+        ("write_file", BuildSchema("write_file",
+            "Write content to a file on a managed host. Creates a timestamped backup by default. Use for safe config file edits.",
+            new Dictionary<string, JsonObject>
+            {
+                ["host_id"] = Prop("string", "The host GUID"),
+                ["file_path"] = Prop("string", "Absolute path to the file to write"),
+                ["content"] = Prop("string", "The content to write to the file"),
+                ["backup"] = Prop("boolean", "If true (default), create a timestamped backup before overwriting")
+            },
+            required: ["host_id", "file_path", "content"])),
     ];
 
     private static JsonObject Prop(string type, string description) => new()
