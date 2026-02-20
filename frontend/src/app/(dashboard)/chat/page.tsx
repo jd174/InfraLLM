@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useSessions, useMessages } from "@/hooks/useSession";
 import { useHosts } from "@/hooks/useHosts";
 import { usePromptSettings } from "@/hooks/usePromptSettings";
+import { useFeatures } from "@/hooks/useFeatures";
 import { formatRelativeTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -91,6 +92,7 @@ function SessionList({
 }
 
 export default function ChatPage() {
+  const { chatEnabled } = useFeatures();
   const { sessions, createSession, deleteSession } = useSessions();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -176,6 +178,22 @@ export default function ChatPage() {
       return base.includes(hostId) ? base.filter((id) => id !== hostId) : [...base, hostId];
     });
   };
+
+  if (!chatEnabled) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center">
+        <div className="space-y-3 max-w-sm">
+          <h2 className="text-xl font-semibold text-foreground">Chat unavailable</h2>
+          <p className="text-sm text-muted-foreground">
+            The built-in AI chat requires an Anthropic API key to be configured on the server.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            You can still use InfraLLM via the MCP server from Claude Desktop or any compatible client.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full">
