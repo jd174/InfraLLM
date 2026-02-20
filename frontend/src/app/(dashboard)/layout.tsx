@@ -7,6 +7,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { logout } from "@/lib/auth";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useFeatures } from "@/hooks/useFeatures";
 import {
   ChatIcon,
   JobRunsIcon,
@@ -25,8 +26,7 @@ import {
   TokenIcon,
 } from "@/components/ui/Icons";
 
-const navItems = [
-  { href: "/chat", label: "Chat", Icon: ChatIcon },
+const BASE_NAV_ITEMS = [
   { href: "/job-runs", label: "Job Runs", Icon: JobRunsIcon },
   { href: "/jobs", label: "Jobs", Icon: JobsIcon },
   { href: "/hosts", label: "Hosts", Icon: HostsIcon },
@@ -43,7 +43,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const { user, isAuthenticated } = useAuthStore();
   const { sidebarOpen, toggleSidebar } = useUIStore();
+  const { chatEnabled } = useFeatures();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const navItems = chatEnabled
+    ? [{ href: "/chat", label: "Chat", Icon: ChatIcon }, ...BASE_NAV_ITEMS]
+    : BASE_NAV_ITEMS;
 
   useEffect(() => {
     if (!isAuthenticated) router.push("/login");
