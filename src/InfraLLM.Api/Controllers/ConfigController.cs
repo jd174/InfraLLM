@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using InfraLLM.Infrastructure.Services;
 
 namespace InfraLLM.Api.Controllers;
 
@@ -22,6 +23,7 @@ public class ConfigController : ControllerBase
     [HttpGet]
     public IActionResult GetFeatures() => Ok(new
     {
-        chatEnabled = !string.IsNullOrWhiteSpace(_config["Anthropic:ApiKey"])
+        chatEnabled = AnthropicLlmService.IsProviderConfigured(_config),
+        llmProvider = AnthropicLlmService.ResolveProvider(_config)
     });
 }

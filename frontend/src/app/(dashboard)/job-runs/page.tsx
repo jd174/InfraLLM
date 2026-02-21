@@ -17,7 +17,7 @@ export default function JobRunsPage() {
         <div className="space-y-3 max-w-sm">
           <h2 className="text-xl font-semibold text-foreground">Job runs unavailable</h2>
           <p className="text-sm text-muted-foreground">
-            Job runs require an Anthropic API key to be configured on the server.
+            Job runs require a configured LLM provider on the server.
           </p>
         </div>
       </div>
