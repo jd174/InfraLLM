@@ -12,7 +12,13 @@ services:
       - Jwt__Issuer=InfraLLM
       - Jwt__Audience=InfraLLM
       - CredentialEncryption__MasterKey=${CREDENTIAL_MASTER_KEY:-${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION_minimum_32_characters_long!}}
+      - Llm__Provider=${LLM_PROVIDER:-anthropic}
       - Anthropic__ApiKey=${ANTHROPIC_API_KEY:-}
+      - OpenAI__ApiKey=${OPENAI_API_KEY:-}
+      - OpenAI__BaseUrl=${OPENAI_BASE_URL:-https://api.openai.com}
+      - OpenAI__Model=${OPENAI_MODEL:-gpt-4.1}
+      - Ollama__BaseUrl=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - Ollama__Model=${OLLAMA_MODEL:-llama3.1}
     ports:
       - "3010:80"
     depends_on:

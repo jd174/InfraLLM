@@ -24,7 +24,7 @@ export default function JobsPage() {
         <div className="space-y-3 max-w-sm">
           <h2 className="text-xl font-semibold text-foreground">Jobs unavailable</h2>
           <p className="text-sm text-muted-foreground">
-            Jobs require an Anthropic API key to be configured on the server.
+            Jobs require a configured LLM provider on the server.
           </p>
         </div>
       </div>

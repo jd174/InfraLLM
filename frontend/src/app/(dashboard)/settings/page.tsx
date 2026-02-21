@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Label } from "@/components/ui/Label";
-import { Select } from "@/components/ui/Select";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import { Alert } from "@/components/ui/Alert";
 
@@ -253,18 +252,17 @@ export default function SettingsPage() {
           <form onSubmit={handleSavePrompt} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="defaultModel">Default model</Label>
-              <Select
+              <Input
                 id="defaultModel"
                 value={effectivePromptSettings.defaultModel}
                 onChange={(e) =>
                   setPromptDraft((s) => ({ ...s, defaultModel: e.target.value }))
                 }
-              >
-                <option value="">Auto (server default)</option>
-                <option value="claude-opus-4-6">Claude Opus 4.6</option>
-                <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
-                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-              </Select>
+                placeholder="Auto (server default), gpt-5, gpt-4.1, llama3.1, ..."
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave blank to use the server default model for the active provider.
+              </p>
             </div>
 
             <div className="space-y-1.5">

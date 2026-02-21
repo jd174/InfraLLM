@@ -92,7 +92,7 @@ function SessionList({
 }
 
 export default function ChatPage() {
-  const { chatEnabled } = useFeatures();
+  const { chatEnabled, llmProvider } = useFeatures();
   const { sessions, createSession, deleteSession } = useSessions();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -185,10 +185,13 @@ export default function ChatPage() {
         <div className="space-y-3 max-w-sm">
           <h2 className="text-xl font-semibold text-foreground">Chat unavailable</h2>
           <p className="text-sm text-muted-foreground">
-            The built-in AI chat requires an Anthropic API key to be configured on the server.
+            The built-in AI chat requires a configured LLM provider on the server.
           </p>
           <p className="text-sm text-muted-foreground">
-            You can still use InfraLLM via the MCP server from Claude Desktop or any compatible client.
+            Configure Anthropic, OpenAI, or Ollama in server settings, then refresh this page.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Current provider: {llmProvider || "unknown"}
           </p>
         </div>
       </div>
