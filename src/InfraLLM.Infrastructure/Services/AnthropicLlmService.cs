@@ -1509,7 +1509,7 @@ public class AnthropicLlmService : ILlmService
         {
             var allowed = string.Join(", ", p.AllowedCommandPatterns);
             var denied = string.Join(", ", p.DeniedCommandPatterns);
-            return $"- {p.Name}: Allow=[{allowed}] Deny=[{denied}] RequireApproval={p.RequireApproval}";
+            return $"- {p.Name}: Allow=[{allowed}] Deny=[{denied}]";
         }));
 
         var mcpToolSection = BuildMcpToolsSection(mcpToolJsonStrings);
