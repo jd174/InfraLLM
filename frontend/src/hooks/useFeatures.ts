@@ -5,9 +5,10 @@ import { api } from "@/lib/api";
 
 interface Features {
   chatEnabled: boolean;
+  llmProvider?: string;
 }
 
-const DEFAULT: Features = { chatEnabled: true };
+const DEFAULT: Features = { chatEnabled: true, llmProvider: "anthropic" };
 
 // Module-level cache so layout + any child page share a single fetch.
 let promise: Promise<Features> | null = null;

@@ -1,5 +1,3 @@
-using System.Net.Http.Headers;
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -13,6 +11,10 @@ namespace InfraLLM.Infrastructure.Services;
 
 public class AnthropicLlmService : ILlmService
 {
+    public const string ProviderAnthropic = "anthropic";
+    public const string ProviderOpenAi = "openai";
+    public const string ProviderOllama = "ollama";
+
     private readonly IConfiguration _config;
     private readonly ILogger<AnthropicLlmService> _logger;
     private readonly HttpClient _httpClient;
@@ -26,6 +28,9 @@ public class AnthropicLlmService : ILlmService
     {
         ["claude-sonnet-4-5-20250929"] = 0.003m,   // per 1K input tokens (approximate)
         ["claude-haiku-4-5-20251001"] = 0.0008m,
+        ["gpt-5"] = 0.005m,
+        ["gpt-4.1"] = 0.0025m,
+        ["gpt-4o"] = 0.0025m,
     };
 
     private const int MaxToolLoopIterations = 10;
@@ -46,15 +51,6 @@ public class AnthropicLlmService : ILlmService
         _hostRepository = hostRepository;
         _hostNoteRepository = hostNoteRepository;
         _mcpToolRegistry = mcpToolRegistry;
-
-        _httpClient.BaseAddress = new Uri("https://api.anthropic.com");
-        _httpClient.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-
-        var apiKey = _config["Anthropic:ApiKey"];
-        if (!string.IsNullOrEmpty(apiKey))
-        {
-            _httpClient.DefaultRequestHeaders.Add("x-api-key", apiKey);
-        }
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -130,11 +126,16 @@ public class AnthropicLlmService : ILlmService
         List<Message> conversationHistory,
         CancellationToken ct = default)
     {
-        var apiKey = _config["Anthropic:ApiKey"];
-        if (string.IsNullOrEmpty(apiKey))
+        var provider = ResolveProvider(_config);
+        if (!IsProviderConfigured(_config))
         {
-            _logger.LogWarning("Anthropic API key not configured (session title generation)");
+            _logger.LogWarning("LLM provider is not configured (session title generation)");
             return null;
+        }
+
+        if (provider == ProviderOpenAi || provider == ProviderOllama)
+        {
+            return await GenerateSessionTitleOpenAiCompatibleAsync(provider, userId, conversationHistory, ct);
         }
 
         var model = _config["Anthropic:TitleModel"] ?? _config["Anthropic:Model"] ?? "claude-sonnet-4-5-20250929";
@@ -157,7 +158,7 @@ public class AnthropicLlmService : ILlmService
         var json = JsonSerializer.Serialize(request, _jsonOptions);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        var response = await _httpClient.PostAsync("/v1/messages", content, ct);
+        var response = await SendProviderRequestAsync(provider, HttpMethod.Post, "/v1/messages", content, ct);
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
@@ -207,17 +208,36 @@ public class AnthropicLlmService : ILlmService
         Func<string, Task>? onStatusUpdate,
         CancellationToken ct)
     {
-        var apiKey = _config["Anthropic:ApiKey"];
-        if (string.IsNullOrEmpty(apiKey))
+        var provider = ResolveProvider(_config);
+        if (!IsProviderConfigured(_config))
         {
-            _logger.LogWarning("Anthropic API key not configured");
+            _logger.LogWarning("LLM provider is not configured");
             return new LlmResponse
             {
                 MessageId = Guid.NewGuid().ToString(),
-                Content = "LLM service is not configured. Please set the Anthropic API key.",
+                Content = "LLM service is not configured. Please configure an LLM provider and API key.",
                 TokensUsed = 0,
                 Cost = 0
             };
+        }
+
+        if (provider == ProviderOpenAi || provider == ProviderOllama)
+        {
+            return await SendOpenAiCompatibleMessageInternalAsync(
+                provider,
+                userId,
+                sessionId,
+                organizationId,
+                message,
+                availableHosts,
+                policies,
+                conversationHistory,
+                customSystemPrompt,
+                personalizationPrompt,
+                modelOverride,
+                onTextDelta,
+                onStatusUpdate,
+                ct);
         }
 
         var model = modelOverride ?? _config["Anthropic:Model"] ?? "claude-sonnet-4-5-20250929";
@@ -286,7 +306,7 @@ public class AnthropicLlmService : ILlmService
                 var json = JsonSerializer.Serialize(request, _jsonOptions);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.PostAsync("/v1/messages", content, ct);
+                var response = await SendProviderRequestAsync(ProviderAnthropic, HttpMethod.Post, "/v1/messages", content, ct);
                 var responseBody = await response.Content.ReadAsStringAsync(ct);
 
                 if (!response.IsSuccessStatusCode)
@@ -431,19 +451,516 @@ public class AnthropicLlmService : ILlmService
         };
     }
 
+    private async Task<LlmResponse> SendOpenAiCompatibleMessageInternalAsync(
+        string provider,
+        string userId,
+        string sessionId,
+        Guid organizationId,
+        string message,
+        List<Host> availableHosts,
+        List<Policy> policies,
+        List<Message> conversationHistory,
+        string? customSystemPrompt,
+        string? personalizationPrompt,
+        string? modelOverride,
+        Func<string, Task>? onTextDelta,
+        Func<string, Task>? onStatusUpdate,
+        CancellationToken ct)
+    {
+        var section = provider == ProviderOllama ? "Ollama" : "OpenAI";
+        var model = modelOverride
+            ?? _config[$"{section}:Model"]
+            ?? (provider == ProviderOllama ? "llama3.1" : "gpt-4.1");
+        var maxTokens = int.Parse(_config[$"{section}:MaxTokens"] ?? "8192");
+
+        var mcpToolJsonStrings = await _mcpToolRegistry.GetToolDefinitionsAsync(organizationId, ct);
+        var systemPrompt = await BuildSystemPromptAsync(
+            userId,
+            availableHosts,
+            policies,
+            customSystemPrompt,
+            personalizationPrompt,
+            mcpToolJsonStrings);
+
+        var messages = new List<Dictionary<string, object>>
+        {
+            new()
+            {
+                ["role"] = "system",
+                ["content"] = systemPrompt
+            }
+        };
+
+        messages.AddRange(conversationHistory
+            .OrderBy(m => m.CreatedAt)
+            .TakeLast(50)
+            .Where(m => !string.IsNullOrWhiteSpace(m.Content))
+            .Select(m => new Dictionary<string, object>
+            {
+                ["role"] = m.Role,
+                ["content"] = m.Content
+            }));
+
+        messages.Add(new Dictionary<string, object>
+        {
+            ["role"] = "user",
+            ["content"] = message
+        });
+
+        var tools = BuildOpenAiToolDefinitions(mcpToolJsonStrings);
+
+        var totalTokens = 0;
+        var allTextContent = new StringBuilder();
+        var allToolCalls = new List<ToolCall>();
+        string? lastMessageId = null;
+
+        if (onStatusUpdate != null)
+            await onStatusUpdate("Thinking...");
+
+        for (var iteration = 0; iteration < MaxToolLoopIterations; iteration++)
+        {
+            var request = new Dictionary<string, object>
+            {
+                ["model"] = model,
+                ["max_tokens"] = maxTokens,
+                ["messages"] = messages
+            };
+
+            if (tools.Count > 0)
+            {
+                request["tools"] = tools;
+                request["tool_choice"] = "auto";
+            }
+
+            var json = JsonSerializer.Serialize(request, _jsonOptions);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            var response = await SendProviderRequestAsync(provider, HttpMethod.Post, "/v1/chat/completions", content, ct);
+            var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("{Provider} API error: {Status} - {Body}", provider, response.StatusCode, responseBody);
+                return new LlmResponse
+                {
+                    MessageId = Guid.NewGuid().ToString(),
+                    Content = allTextContent.Length > 0
+                        ? allTextContent.ToString()
+                        : $"LLM request failed: {response.StatusCode}",
+                    TokensUsed = totalTokens,
+                    Cost = 0
+                };
+            }
+
+            using var doc = JsonDocument.Parse(responseBody);
+            var root = doc.RootElement;
+            lastMessageId = root.TryGetProperty("id", out var idEl) ? idEl.GetString() : lastMessageId;
+
+            if (root.TryGetProperty("usage", out var usageEl))
+            {
+                if (usageEl.TryGetProperty("prompt_tokens", out var inputEl)) totalTokens += inputEl.GetInt32();
+                if (usageEl.TryGetProperty("completion_tokens", out var outputEl)) totalTokens += outputEl.GetInt32();
+            }
+
+            if (!root.TryGetProperty("choices", out var choicesEl)
+                || choicesEl.ValueKind != JsonValueKind.Array
+                || choicesEl.GetArrayLength() == 0)
+            {
+                break;
+            }
+
+            var choice = choicesEl[0];
+            if (!choice.TryGetProperty("message", out var messageEl))
+            {
+                break;
+            }
+
+            var assistantText = ExtractOpenAiMessageText(messageEl);
+            if (!string.IsNullOrWhiteSpace(assistantText))
+            {
+                allTextContent.Append(assistantText);
+                if (onTextDelta != null)
+                {
+                    await onTextDelta(assistantText);
+                }
+            }
+
+            var parsedToolCalls = new List<Dictionary<string, object>>();
+            var parsedToolBlocks = new List<AnthropicContentBlock>();
+
+            if (messageEl.TryGetProperty("tool_calls", out var toolCallsEl)
+                && toolCallsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var toolCallEl in toolCallsEl.EnumerateArray())
+                {
+                    var toolCallId = toolCallEl.TryGetProperty("id", out var tcIdEl) ? tcIdEl.GetString() ?? string.Empty : string.Empty;
+                    if (!toolCallEl.TryGetProperty("function", out var functionEl)) continue;
+
+                    var functionName = functionEl.TryGetProperty("name", out var nameEl)
+                        ? nameEl.GetString() ?? string.Empty
+                        : string.Empty;
+
+                    var functionArgsRaw = functionEl.TryGetProperty("arguments", out var argsEl)
+                        ? argsEl.GetString() ?? "{}"
+                        : "{}";
+
+                    Dictionary<string, object> functionArgs;
+                    try
+                    {
+                        functionArgs = JsonSerializer.Deserialize<Dictionary<string, object>>(functionArgsRaw, _jsonOptions) ?? [];
+                    }
+                    catch
+                    {
+                        functionArgs = [];
+                    }
+
+                    parsedToolCalls.Add(new Dictionary<string, object>
+                    {
+                        ["id"] = toolCallId,
+                        ["type"] = "function",
+                        ["function"] = new Dictionary<string, object>
+                        {
+                            ["name"] = functionName,
+                            ["arguments"] = functionArgsRaw
+                        }
+                    });
+
+                    parsedToolBlocks.Add(new AnthropicContentBlock
+                    {
+                        Id = toolCallId,
+                        Name = functionName,
+                        Input = functionArgs,
+                        Type = "tool_use"
+                    });
+
+                    allToolCalls.Add(new ToolCall
+                    {
+                        ToolName = functionName,
+                        Parameters = functionArgs
+                    });
+                }
+            }
+
+            if (parsedToolBlocks.Count == 0)
+            {
+                break;
+            }
+
+            if (onStatusUpdate != null)
+            {
+                var toolNames = parsedToolBlocks
+                    .Select(b => b.Name)
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Distinct()
+                    .ToList();
+
+                var status = toolNames.Count > 0
+                    ? $"Running tools: {string.Join(", ", toolNames)}"
+                    : $"Running {parsedToolBlocks.Count} tool call(s)...";
+
+                await onStatusUpdate(status);
+            }
+
+            var assistantMessage = new Dictionary<string, object>
+            {
+                ["role"] = "assistant",
+                ["content"] = assistantText,
+                ["tool_calls"] = parsedToolCalls
+            };
+            messages.Add(assistantMessage);
+
+            foreach (var toolBlock in parsedToolBlocks)
+            {
+                var toolResult = await ExecuteToolAsync(userId, organizationId, toolBlock, onStatusUpdate, ct);
+                messages.Add(new Dictionary<string, object>
+                {
+                    ["role"] = "tool",
+                    ["tool_call_id"] = toolBlock.Id ?? string.Empty,
+                    ["content"] = toolResult
+                });
+            }
+
+            if (onStatusUpdate != null)
+            {
+                await onStatusUpdate("Thinking...");
+            }
+        }
+
+        var costPer1K = ModelPricing.GetValueOrDefault(model, 0.003m);
+        var cost = totalTokens * costPer1K / 1000m;
+
+        return new LlmResponse
+        {
+            MessageId = lastMessageId ?? Guid.NewGuid().ToString(),
+            Content = allTextContent.ToString(),
+            ToolCalls = allToolCalls,
+            TokensUsed = totalTokens,
+            Cost = cost
+        };
+    }
+
+    private async Task<string?> GenerateSessionTitleOpenAiCompatibleAsync(
+        string provider,
+        string userId,
+        List<Message> conversationHistory,
+        CancellationToken ct)
+    {
+        var section = provider == ProviderOllama ? "Ollama" : "OpenAI";
+        var model = _config[$"{section}:TitleModel"]
+            ?? _config[$"{section}:Model"]
+            ?? (provider == ProviderOllama ? "llama3.1" : "gpt-4.1");
+        var maxTokens = int.Parse(_config[$"{section}:TitleMaxTokens"] ?? "32");
+
+        var prompt = BuildSessionTitlePrompt(conversationHistory);
+        if (string.IsNullOrWhiteSpace(prompt)) return null;
+
+        var request = new Dictionary<string, object>
+        {
+            ["model"] = model,
+            ["max_tokens"] = maxTokens,
+            ["messages"] = new List<Dictionary<string, object>>
+            {
+                new()
+                {
+                    ["role"] = "system",
+                    ["content"] = "Generate a concise 3-6 word title for the conversation. Return only the title, no quotes."
+                },
+                new()
+                {
+                    ["role"] = "user",
+                    ["content"] = prompt
+                }
+            }
+        };
+
+        var json = JsonSerializer.Serialize(request, _jsonOptions);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await SendProviderRequestAsync(provider, HttpMethod.Post, "/v1/chat/completions", content, ct);
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogError("{Provider} API error (session title): {Status} - {Body}", provider, response.StatusCode, responseBody);
+            return null;
+        }
+
+        using var doc = JsonDocument.Parse(responseBody);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("choices", out var choicesEl)
+            || choicesEl.ValueKind != JsonValueKind.Array
+            || choicesEl.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var choice = choicesEl[0];
+        if (!choice.TryGetProperty("message", out var messageEl)) return null;
+
+        var title = ExtractOpenAiMessageText(messageEl).Trim();
+        if (string.IsNullOrWhiteSpace(title)) return null;
+
+        title = title.Trim().Trim('"', '\'', '\u201c', '\u201d');
+        if (title.StartsWith("Title:", StringComparison.OrdinalIgnoreCase))
+        {
+            title = title[6..].Trim();
+        }
+
+        title = title.TrimEnd('.', '!', '?');
+        if (title.Length > 80)
+        {
+            title = title[..80].Trim();
+        }
+
+        _logger.LogInformation("Generated session title ({Provider}) for user {UserId}: {Title}", provider, userId, title);
+        return string.IsNullOrWhiteSpace(title) ? null : title;
+    }
+
+    private static string ExtractOpenAiMessageText(JsonElement messageEl)
+    {
+        if (!messageEl.TryGetProperty("content", out var contentEl)) return string.Empty;
+
+        if (contentEl.ValueKind == JsonValueKind.String)
+        {
+            return contentEl.GetString() ?? string.Empty;
+        }
+
+        if (contentEl.ValueKind != JsonValueKind.Array) return string.Empty;
+
+        var sb = new StringBuilder();
+        foreach (var part in contentEl.EnumerateArray())
+        {
+            if (part.ValueKind != JsonValueKind.Object) continue;
+
+            if (part.TryGetProperty("type", out var typeEl)
+                && string.Equals(typeEl.GetString(), "text", StringComparison.OrdinalIgnoreCase)
+                && part.TryGetProperty("text", out var textEl))
+            {
+                sb.Append(textEl.GetString());
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private List<object> BuildOpenAiToolDefinitions(IReadOnlyList<string> mcpToolJsonStrings)
+    {
+        var tools = new List<object>();
+
+        foreach (var builtIn in GetBuiltInToolDefinitions())
+        {
+            var name = builtIn.TryGetValue("name", out var nameObj) ? nameObj?.ToString() ?? string.Empty : string.Empty;
+            var description = builtIn.TryGetValue("description", out var descObj) ? descObj?.ToString() ?? string.Empty : string.Empty;
+            var parameters = builtIn.TryGetValue("input_schema", out var schemaObj)
+                ? schemaObj ?? new Dictionary<string, object> { ["type"] = "object", ["properties"] = new Dictionary<string, object>() }
+                : new Dictionary<string, object> { ["type"] = "object", ["properties"] = new Dictionary<string, object>() };
+
+            tools.Add(new Dictionary<string, object>
+            {
+                ["type"] = "function",
+                ["function"] = new Dictionary<string, object>
+                {
+                    ["name"] = name,
+                    ["description"] = description,
+                    ["parameters"] = parameters
+                }
+            });
+        }
+
+        foreach (var toolJson in mcpToolJsonStrings)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(toolJson);
+                var root = doc.RootElement;
+                var name = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                var description = root.TryGetProperty("description", out var descEl) ? descEl.GetString() ?? string.Empty : string.Empty;
+                object parameters = new Dictionary<string, object>
+                {
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<string, object>()
+                };
+
+                if (root.TryGetProperty("input_schema", out var schemaEl))
+                {
+                    parameters = JsonSerializer.Deserialize<object>(schemaEl.GetRawText(), _jsonOptions)
+                        ?? parameters;
+                }
+                else if (root.TryGetProperty("parameters", out var paramsEl))
+                {
+                    parameters = JsonSerializer.Deserialize<object>(paramsEl.GetRawText(), _jsonOptions)
+                        ?? parameters;
+                }
+
+                tools.Add(new Dictionary<string, object>
+                {
+                    ["type"] = "function",
+                    ["function"] = new Dictionary<string, object>
+                    {
+                        ["name"] = name,
+                        ["description"] = description,
+                        ["parameters"] = parameters
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse MCP tool definition JSON for OpenAI-compatible format: {Json}", toolJson);
+            }
+        }
+
+        return tools;
+    }
+
+    private async Task<HttpResponseMessage> SendProviderRequestAsync(
+        string provider,
+        HttpMethod method,
+        string path,
+        HttpContent? content,
+        CancellationToken ct)
+    {
+        var baseUrl = provider switch
+        {
+            ProviderOpenAi => _config["OpenAI:BaseUrl"] ?? "https://api.openai.com",
+            ProviderOllama => _config["Ollama:BaseUrl"] ?? "http://localhost:11434",
+            _ => _config["Anthropic:BaseUrl"] ?? "https://api.anthropic.com"
+        };
+
+        var requestUri = new Uri($"{baseUrl.TrimEnd('/')}/{path.TrimStart('/')}");
+        var request = new HttpRequestMessage(method, requestUri)
+        {
+            Content = content
+        };
+
+        request.Headers.Accept.Clear();
+        request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+
+        if (provider == ProviderAnthropic)
+        {
+            request.Headers.Add("anthropic-version", "2023-06-01");
+            var apiKey = _config["Anthropic:ApiKey"];
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                request.Headers.Add("x-api-key", apiKey);
+            }
+        }
+        else
+        {
+            var apiKey = provider == ProviderOllama
+                ? _config["Ollama:ApiKey"]
+                : _config["OpenAI:ApiKey"];
+
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            }
+        }
+
+        return await _httpClient.SendAsync(request, ct);
+    }
+
+    public static string ResolveProvider(IConfiguration config)
+    {
+        var configured = config["Llm:Provider"]?.Trim().ToLowerInvariant();
+        if (configured == ProviderAnthropic || configured == ProviderOpenAi || configured == ProviderOllama)
+        {
+            return configured;
+        }
+
+        if (!string.IsNullOrWhiteSpace(config["Anthropic:ApiKey"])) return ProviderAnthropic;
+        if (!string.IsNullOrWhiteSpace(config["OpenAI:ApiKey"])) return ProviderOpenAi;
+
+        return ProviderAnthropic;
+    }
+
+    public static bool IsProviderConfigured(IConfiguration config)
+    {
+        var provider = ResolveProvider(config);
+        return provider switch
+        {
+            ProviderAnthropic => !string.IsNullOrWhiteSpace(config["Anthropic:ApiKey"]),
+            ProviderOpenAi => !string.IsNullOrWhiteSpace(config["OpenAI:ApiKey"]),
+            ProviderOllama => true,
+            _ => false
+        };
+    }
+
     private async Task<AnthropicResponse?> SendStreamingRequestAsync(
         Dictionary<string, object> request,
         Func<string, Task> onTextDelta,
         CancellationToken ct)
     {
         var json = JsonSerializer.Serialize(request, _jsonOptions);
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-
         using var response = await _httpClient.SendAsync(
-            httpRequest,
+            new HttpRequestMessage(HttpMethod.Post, new Uri($"{(_config["Anthropic:BaseUrl"] ?? "https://api.anthropic.com").TrimEnd('/')}/v1/messages"))
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                Headers =
+                {
+                    { "anthropic-version", "2023-06-01" },
+                    { "x-api-key", _config["Anthropic:ApiKey"] ?? string.Empty }
+                }
+            },
             HttpCompletionOption.ResponseHeadersRead,
             ct);
 
@@ -992,7 +1509,7 @@ public class AnthropicLlmService : ILlmService
         {
             var allowed = string.Join(", ", p.AllowedCommandPatterns);
             var denied = string.Join(", ", p.DeniedCommandPatterns);
-            return $"- {p.Name}: Allow=[{allowed}] Deny=[{denied}] RequireApproval={p.RequireApproval}";
+            return $"- {p.Name}: Allow=[{allowed}] Deny=[{denied}]";
         }));
 
         var mcpToolSection = BuildMcpToolsSection(mcpToolJsonStrings);

@@ -4,7 +4,6 @@ public class PolicyValidationResult
 {
     public bool IsAllowed { get; set; }
     public string? DenialReason { get; set; }
-    public bool RequiresApproval { get; set; }
     public string? MatchedPattern { get; set; }
 }
 

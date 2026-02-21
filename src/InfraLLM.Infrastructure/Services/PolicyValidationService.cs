@@ -92,7 +92,6 @@ public class PolicyValidationService : IPolicyService
                     return new PolicyValidationResult
                     {
                         IsAllowed = true,
-                        RequiresApproval = up.Policy.RequireApproval,
                         MatchedPattern = pattern
                     };
                 }
@@ -141,7 +140,6 @@ public class PolicyValidationService : IPolicyService
                 return new PolicyValidationResult
                 {
                     IsAllowed = true,
-                    RequiresApproval = policy.RequireApproval,
                     MatchedPattern = pattern
                 };
             }

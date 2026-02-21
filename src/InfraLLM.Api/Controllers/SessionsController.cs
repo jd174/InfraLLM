@@ -5,6 +5,7 @@ using InfraLLM.Api.Hubs;
 using InfraLLM.Api.Services;
 using InfraLLM.Core.Interfaces;
 using InfraLLM.Core.Models;
+using InfraLLM.Infrastructure.Services;
 using HostModel = InfraLLM.Core.Models.Host;
 
 namespace InfraLLM.Api.Controllers;
@@ -121,8 +122,8 @@ public class SessionsController : ControllerBase
     [HttpPost("{id:guid}/messages")]
     public async Task<IActionResult> SendMessage(Guid id, [FromBody] SendMessageRequest request, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_config["Anthropic:ApiKey"]))
-            return StatusCode(503, new { error = "Chat is not available: the Anthropic API key is not configured on this server." });
+        if (!AnthropicLlmService.IsProviderConfigured(_config))
+            return StatusCode(503, new { error = "Chat is not available: no LLM provider is configured on this server." });
 
         if (string.IsNullOrWhiteSpace(request.Content))
             return BadRequest(new { error = "Message content is required" });

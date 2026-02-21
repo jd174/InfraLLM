@@ -4,11 +4,11 @@
 
 InfraLLM is an open source infrastructure assistant. Using plain english, sysadmins can troubleshoot issues, add functionality and perform maintenance on their servers. The InfraLLM API layer sits between the servers and the LLM providing tooling, guardrails, and a full audit log. 
 
-It’s a chat-first workflow for ops work: policy enforcement, credential encryption, approvals, and streaming responses. You get the speed and knowledge of LLMs without surrendering control.
+It's a chat-first workflow for ops work: policy enforcement, credential encryption, and streaming responses. You get the speed and knowledge of LLMs without surrendering control.
 
 InfraLLM can also run as an MCP server, so MCP-compatible clients (Claude Desktop, Cursor, etc.) can connect to it directly and safely interact with hosts configured in within.
 
-InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled jobs, webhook-triggered workflows, and repeatable incident response playbooks that can run across fleets with approvals and logging baked in.
+InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled jobs, webhook-triggered workflows, and repeatable incident response playbooks that can run across fleets with policy enforcement and logging baked in.
 
 ![screenshot placeholder](docs/screenshot.png)
 
@@ -27,7 +27,7 @@ InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled
 - **Natural language SSH** — describe a task, InfraLLM plans and executes solutions.
 - **Host management** — add servers via ssh credentials (Encrypted at rest!)
 - **Jobs + webhooks** — trigger automated incident workflows from monitoring alerts, ticketing systems, or internal tooling
-- **Approval flows** — sensitive or destructive commands require explicit confirmation before execution
+- **Policy enforcement** — commands are allowed or denied based on configurable regex patterns per user and host
 - **Audit logging** — every command and response is logged against the user who triggered it
 - **Streaming responses** — chat UI streams responses in real time via SignalR
 - **JWT auth** — register/login, tokens stored in browser, backend fully stateless
@@ -41,9 +41,9 @@ flowchart LR
 	U["Operator"] --> UI["Web UI (Next.js)"]
 	UI --> API["InfraLLM API"]
 	API --> AUTH["JWT Auth"]
-	API --> POLICY["Policy & Approval"]
+	API --> POLICY["Policy"]
 	API <--> LLM["LLM Provider"]
-	POLICY -- "approved commands" --> HOSTS["Hosts (SSH)"]
+	POLICY -- "allowed commands" --> HOSTS["Hosts (SSH)"]
 	POLICY -- "tool calls" --> MCP["MCP Servers"]
 	HOSTS --> API
 	MCP --> API
@@ -60,7 +60,7 @@ flowchart LR
 | Backend | ASP.NET Core (.NET 10), SignalR, Entity Framework Core |
 | Database | PostgreSQL 16 |
 | Frontend | Next.js (standalone build) |
-| LLM | Optional: Anthropic Claude (via API key) |
+| LLM | Optional: Anthropic, OpenAI, or Ollama |
 | Container | Docker, nginx (all-in-one image) |
 
 ---
@@ -69,11 +69,24 @@ flowchart LR
 
 These are the key variables you'll need to configure. For local dev, everything has hardcoded defaults in `docker-compose.yml`.
 
-`ANTHROPIC_API_KEY` is optional. Set it only if you want InfraLLM to call Anthropic for chat/LLM responses. Without this key, you will need to use InfraLLM as an MCP server.
+LLM access is optional. InfraLLM supports `anthropic`, `openai`, and `ollama` providers.
+
+- Set `LLM_PROVIDER` to one of: `anthropic`, `openai`, `ollama`
+- For `anthropic`, set `ANTHROPIC_API_KEY`
+- For `openai`, set `OPENAI_API_KEY` (and optional `OPENAI_BASE_URL` for compatible gateways)
+- For `ollama`, set `OLLAMA_BASE_URL` (default `http://host.docker.internal:11434` in Docker)
+
+Without a configured provider, built-in chat/jobs are disabled and InfraLLM can still be used via MCP.
 
 | Variable | Description | Example |
 |---|---|---|
+| `LLM_PROVIDER` | LLM provider (`anthropic`, `openai`, `ollama`) | `openai` |
 | `ANTHROPIC_API_KEY` | (Optional) Your Anthropic API key (enables LLM chat) | `sk-ant-...` |
+| `OPENAI_API_KEY` | (Optional) Your OpenAI (or compatible) API key | `sk-proj-...` |
+| `OPENAI_BASE_URL` | (Optional) OpenAI-compatible API base URL | `https://api.openai.com` |
+| `OPENAI_MODEL` | Default OpenAI model | `gpt-4.1` |
+| `OLLAMA_BASE_URL` | Ollama API base URL | `http://host.docker.internal:11434` |
+| `OLLAMA_MODEL` | Default Ollama model | `llama3.1` |
 | `ConnectionStrings__DefaultConnection` | Postgres connection string | `Host=postgres;Port=5432;Database=infrallm;Username=infrallm;Password=secret` |
 | `Jwt__Secret` | JWT signing secret (min 32 chars) | `some_long_random_secret_here` |
 | `Jwt__Issuer` | JWT issuer | `InfraLLM` |
@@ -112,7 +125,10 @@ If you're using Portainer, deploy `docker-compose.prod.yml` directly as a Stack.
 |---|---|
 | `POSTGRES_PASSWORD` | Strong password for the database |
 | `JWT_SECRET` | At least 32 random characters |
+| `LLM_PROVIDER` | `anthropic`, `openai`, or `ollama` |
 | `ANTHROPIC_API_KEY` | (Optional) From console.anthropic.com |
+| `OPENAI_API_KEY` | (Optional) From platform.openai.com |
+| `OLLAMA_BASE_URL` | (Optional) Ollama endpoint if using local models |
 | `CREDENTIAL_MASTER_KEY` | `openssl rand -base64 32` |
 | `CORS_ORIGINS` | Your frontend's public URL |
 
