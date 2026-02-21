@@ -8,7 +8,6 @@ public class Policy
     public string? Description { get; set; }
     public List<string> AllowedCommandPatterns { get; set; } = [];
     public List<string> DeniedCommandPatterns { get; set; } = [];
-    public bool RequireApproval { get; set; }
     public int MaxConcurrentCommands { get; set; } = 5;
     public bool IsEnabled { get; set; } = true;
     public DateTime CreatedAt { get; set; }
