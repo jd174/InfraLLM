@@ -15,10 +15,9 @@ import { PlusIcon, XIcon, TrashIcon } from "@/components/ui/Icons";
 import { cn } from "@/lib/utils";
 
 const presetConfig: Record<string, { border: string; bg: string; text: string }> = {
-  "Read-Only Monitoring":  { border: "border-green-500/30",  bg: "bg-green-500/5",  text: "text-green-400" },
-  "Service Management":    { border: "border-blue-500/30",   bg: "bg-blue-500/5",   text: "text-blue-400" },
-  "Full Access (Dangerous)":{ border: "border-red-500/30",   bg: "bg-red-500/5",    text: "text-red-400" },
-  "Approval Required":     { border: "border-yellow-500/30", bg: "bg-yellow-500/5", text: "text-yellow-400" },
+  "Read-Only Monitoring":   { border: "border-green-500/30", bg: "bg-green-500/5", text: "text-green-400" },
+  "Service Management":     { border: "border-blue-500/30",  bg: "bg-blue-500/5",  text: "text-blue-400" },
+  "Full Access (Dangerous)":{ border: "border-red-500/30",   bg: "bg-red-500/5",   text: "text-red-400" },
 };
 
 export default function PoliciesPage() {
@@ -29,7 +28,6 @@ export default function PoliciesPage() {
     name: "",
     allowedCommandPatterns: [],
     deniedCommandPatterns: [],
-    requireApproval: false,
     maxConcurrentCommands: 5,
   });
   const [allowInput, setAllowInput] = useState("");
@@ -48,7 +46,7 @@ export default function PoliciesPage() {
       await createPolicy(form);
       setShowCreate(false);
       setActivePreset(null);
-      setForm({ name: "", allowedCommandPatterns: [], deniedCommandPatterns: [], requireApproval: false, maxConcurrentCommands: 5 });
+      setForm({ name: "", allowedCommandPatterns: [], deniedCommandPatterns: [], maxConcurrentCommands: 5 });
     } catch {
       // handled by hook
     } finally {
@@ -62,7 +60,6 @@ export default function PoliciesPage() {
       description: preset.description,
       allowedCommandPatterns: [...preset.allowedCommandPatterns],
       deniedCommandPatterns: [...preset.deniedCommandPatterns],
-      requireApproval: preset.requireApproval,
       maxConcurrentCommands: preset.maxConcurrentCommands,
     });
     setActivePreset(preset.name);
@@ -138,7 +135,6 @@ export default function PoliciesPage() {
                       <div className="flex gap-3 mt-2">
                         <span className="text-xs text-green-400/70">{preset.allowedCommandPatterns.length} allow</span>
                         <span className="text-xs text-red-400/70">{preset.deniedCommandPatterns.length} deny</span>
-                        {preset.requireApproval && <span className="text-xs text-yellow-400/70">approval</span>}
                       </div>
                     </button>
                   );
@@ -234,26 +230,15 @@ export default function PoliciesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-                <div>
-                  <Label htmlFor="max-cmd">Max Concurrent Commands</Label>
-                  <Input
-                    id="max-cmd"
-                    type="number"
-                    value={form.maxConcurrentCommands}
-                    onChange={(e) => setForm({ ...form, maxConcurrentCommands: parseInt(e.target.value) })}
-                    min={1}
-                  />
-                </div>
-                <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer pb-2">
-                  <input
-                    type="checkbox"
-                    checked={form.requireApproval}
-                    onChange={(e) => setForm({ ...form, requireApproval: e.target.checked })}
-                    className="rounded border-border accent-primary"
-                  />
-                  Require approval for commands
-                </label>
+              <div>
+                <Label htmlFor="max-cmd">Max Concurrent Commands</Label>
+                <Input
+                  id="max-cmd"
+                  type="number"
+                  value={form.maxConcurrentCommands}
+                  onChange={(e) => setForm({ ...form, maxConcurrentCommands: parseInt(e.target.value) })}
+                  min={1}
+                />
               </div>
 
               <div className="flex justify-end">
@@ -276,7 +261,6 @@ export default function PoliciesPage() {
                 </Link>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {policy.allowedCommandPatterns.length} allow · {policy.deniedCommandPatterns.length} deny
-                  {policy.requireApproval && " · Requires approval"}
                 </p>
               </div>
               <div className="flex items-center gap-2">

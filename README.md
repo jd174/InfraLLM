@@ -4,11 +4,11 @@
 
 InfraLLM is an open source infrastructure assistant. Using plain english, sysadmins can troubleshoot issues, add functionality and perform maintenance on their servers. The InfraLLM API layer sits between the servers and the LLM providing tooling, guardrails, and a full audit log. 
 
-It’s a chat-first workflow for ops work: policy enforcement, credential encryption, approvals, and streaming responses. You get the speed and knowledge of LLMs without surrendering control.
+It's a chat-first workflow for ops work: policy enforcement, credential encryption, and streaming responses. You get the speed and knowledge of LLMs without surrendering control.
 
 InfraLLM can also run as an MCP server, so MCP-compatible clients (Claude Desktop, Cursor, etc.) can connect to it directly and safely interact with hosts configured in within.
 
-InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled jobs, webhook-triggered workflows, and repeatable incident response playbooks that can run across fleets with approvals and logging baked in.
+InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled jobs, webhook-triggered workflows, and repeatable incident response playbooks that can run across fleets with policy enforcement and logging baked in.
 
 ![screenshot placeholder](docs/screenshot.png)
 
@@ -27,7 +27,7 @@ InfraLLM is built for sysadmins and MSPs who need reliable automation: scheduled
 - **Natural language SSH** — describe a task, InfraLLM plans and executes solutions.
 - **Host management** — add servers via ssh credentials (Encrypted at rest!)
 - **Jobs + webhooks** — trigger automated incident workflows from monitoring alerts, ticketing systems, or internal tooling
-- **Approval flows** — sensitive or destructive commands require explicit confirmation before execution
+- **Policy enforcement** — commands are allowed or denied based on configurable regex patterns per user and host
 - **Audit logging** — every command and response is logged against the user who triggered it
 - **Streaming responses** — chat UI streams responses in real time via SignalR
 - **JWT auth** — register/login, tokens stored in browser, backend fully stateless
@@ -41,9 +41,9 @@ flowchart LR
 	U["Operator"] --> UI["Web UI (Next.js)"]
 	UI --> API["InfraLLM API"]
 	API --> AUTH["JWT Auth"]
-	API --> POLICY["Policy & Approval"]
+	API --> POLICY["Policy"]
 	API <--> LLM["LLM Provider"]
-	POLICY -- "approved commands" --> HOSTS["Hosts (SSH)"]
+	POLICY -- "allowed commands" --> HOSTS["Hosts (SSH)"]
 	POLICY -- "tool calls" --> MCP["MCP Servers"]
 	HOSTS --> API
 	MCP --> API

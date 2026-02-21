@@ -56,7 +56,6 @@ public class PoliciesController : ControllerBase
             Description = request.Description,
             AllowedCommandPatterns = request.AllowedCommandPatterns ?? [],
             DeniedCommandPatterns = request.DeniedCommandPatterns ?? [],
-            RequireApproval = request.RequireApproval,
             MaxConcurrentCommands = request.MaxConcurrentCommands,
             IsEnabled = true,
             CreatedAt = DateTime.UtcNow,
@@ -78,7 +77,6 @@ public class PoliciesController : ControllerBase
         policy.Description = request.Description;
         policy.AllowedCommandPatterns = request.AllowedCommandPatterns ?? [];
         policy.DeniedCommandPatterns = request.DeniedCommandPatterns ?? [];
-        policy.RequireApproval = request.RequireApproval;
         policy.MaxConcurrentCommands = request.MaxConcurrentCommands;
         policy.UpdatedAt = DateTime.UtcNow;
 
@@ -252,7 +250,6 @@ public record CreatePolicyRequest(
     string? Description,
     List<string>? AllowedCommandPatterns,
     List<string>? DeniedCommandPatterns,
-    bool RequireApproval = false,
     int MaxConcurrentCommands = 5);
 
 public record TestPolicyRequest(Guid PolicyId, string Command);
@@ -292,13 +289,12 @@ public static class PolicyPresets
                 "^(lsof|lsblk|lscpu|lsmem|dmidecode)"
             ],
             DeniedCommandPatterns = [],
-            RequireApproval = false,
             MaxConcurrentCommands = 10
         },
         new PolicyPresetDto
         {
             Name = "Service Management",
-            Description = "Start, stop, and restart services with approval required for destructive actions",
+            Description = "Start, stop, and restart services with destructive actions blocked",
             AllowedCommandPatterns = [
                 "^(cat|head|tail|less|more) ",
                 "^ls(\\s|$)",
@@ -317,7 +313,6 @@ public static class PolicyPresets
                 "^chmod\\s+777",
                 "^chown\\s+-R"
             ],
-            RequireApproval = false,
             MaxConcurrentCommands = 5
         },
         new PolicyPresetDto
@@ -333,21 +328,7 @@ public static class PolicyPresets
                 "^chmod\\s+-R\\s+777\\s+/",
                 "^chown\\s+-R.*\\s+/$"
             ],
-            RequireApproval = false,
             MaxConcurrentCommands = 5
-        },
-        new PolicyPresetDto
-        {
-            Name = "Approval Required",
-            Description = "All commands allowed but every execution requires explicit approval",
-            AllowedCommandPatterns = [".*"],
-            DeniedCommandPatterns = [
-                "^rm\\s+-rf\\s+/$",
-                "^mkfs",
-                "^dd\\s+if=/dev/(zero|random|urandom)\\s+of=/dev/sd"
-            ],
-            RequireApproval = true,
-            MaxConcurrentCommands = 3
         }
     ];
 }
@@ -358,6 +339,5 @@ public class PolicyPresetDto
     public string Description { get; set; } = "";
     public List<string> AllowedCommandPatterns { get; set; } = [];
     public List<string> DeniedCommandPatterns { get; set; } = [];
-    public bool RequireApproval { get; set; }
     public int MaxConcurrentCommands { get; set; } = 5;
 }

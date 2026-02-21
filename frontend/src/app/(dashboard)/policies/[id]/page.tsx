@@ -48,7 +48,7 @@ export default function PolicyDetailPage() {
       const result = await api.post<PolicyTestResult>(`/api/policies/${id}/test`, { command: testCommand });
       setTestResult(result);
     } catch {
-      setTestResult({ isAllowed: false, denialReason: "Request failed", requiresApproval: false, matchedPattern: null });
+      setTestResult({ isAllowed: false, denialReason: "Request failed", matchedPattern: null });
     } finally {
       setTesting(false);
     }
@@ -144,15 +144,9 @@ export default function PolicyDetailPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t border-border">
-          <div>
-            <p className="text-xs text-muted-foreground">Max Concurrent</p>
-            <p className="mt-0.5">{policy.maxConcurrentCommands}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Require Approval</p>
-            <p className="mt-0.5">{policy.requireApproval ? "Yes" : "No"}</p>
-          </div>
+        <div className="pt-2 border-t border-border text-sm">
+          <p className="text-xs text-muted-foreground">Max Concurrent</p>
+          <p className="mt-0.5">{policy.maxConcurrentCommands}</p>
         </div>
       </Card>
 
@@ -242,7 +236,6 @@ export default function PolicyDetailPage() {
             <div className="flex items-center gap-1.5 font-medium">
               {testResult.isAllowed ? <CheckIcon size={13} /> : <XIcon size={13} />}
               {testResult.isAllowed ? "Allowed" : "Denied"}
-              {testResult.requiresApproval && " (requires approval)"}
             </div>
             {testResult.denialReason && (
               <p className="text-xs mt-1 opacity-80">{testResult.denialReason}</p>
