@@ -1681,7 +1681,7 @@ public class AnthropicLlmService : ILlmService
         new Dictionary<string, object>
         {
             ["name"] = "tail_logs",
-            ["description"] = "Read the last N lines of a log file or systemd journal. Use source_type='file' for log files, 'journald' for systemd service logs. Prefer this over read_file for large log files.",
+            ["description"] = "Retrieve the most recent log output from a log file or systemd journal on a managed host. Use this tool whenever investigating errors, service failures, crash reports, unexpected application behavior, security events, or any situation where recent log output would help diagnose a problem. For log files provide the absolute path as source (e.g. /var/log/syslog, /var/log/nginx/error.log, /var/log/auth.log, /var/log/postgresql/postgresql.log) with source_type='file' (default). For systemd services provide the service name as source (e.g. nginx, docker, sshd, postgresql) with source_type='journald'. This is the preferred tool over read_file for any log file because it returns only recent lines without transferring the full file.",
             ["input_schema"] = new Dictionary<string, object>
             {
                 ["type"] = "object",

@@ -714,7 +714,7 @@ public class InfraMcpController : ControllerBase
             })),
 
         ("tail_logs", BuildSchema("tail_logs",
-            "Read the last N lines of a log file or systemd journal on a host. Use source_type='file' for log files (default), 'journald' for systemd service logs.",
+            "Retrieve the most recent log entries from a log file or systemd journal on a host. Use this tool whenever you need to investigate errors, diagnose service failures, review crash output, check authentication attempts, or understand recent system activity. For log files supply the absolute path as source (e.g. /var/log/syslog, /var/log/nginx/error.log, /var/log/auth.log, /var/log/postgresql/postgresql.log) with source_type='file' (default). For systemd-managed services supply the service name as source (e.g. nginx, docker, sshd, postgresql) with source_type='journald'. Prefer this tool over read_file for any log file because it returns only the most recent lines without transferring the entire file.",
             new Dictionary<string, JsonObject>
             {
                 ["host_id"] = Prop("string", "The host GUID"),
