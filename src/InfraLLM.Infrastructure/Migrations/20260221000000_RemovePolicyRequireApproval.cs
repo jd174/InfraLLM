@@ -1,10 +1,13 @@
+using InfraLLM.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace InfraLLM.Infrastructure.Migrations
 {
-    /// <inheritdoc />
+    [DbContext(typeof(ApplicationDbContext))]
+    [Migration("20260221000000_RemovePolicyRequireApproval")]
     public partial class RemovePolicyRequireApproval : Migration
     {
         /// <inheritdoc />
