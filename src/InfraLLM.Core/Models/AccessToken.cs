@@ -11,6 +11,7 @@ public class AccessToken
     public DateTime? ExpiresAt { get; set; } // null = never expires
     public DateTime? LastUsedAt { get; set; }
     public bool IsActive { get; set; } = true;
+    public List<string>? Scopes { get; set; } // null/empty = unrestricted (pre-scopes tokens)
 
     // Navigation
     public ApplicationUser User { get; set; } = null!;
