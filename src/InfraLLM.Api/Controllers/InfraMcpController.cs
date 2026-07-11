@@ -14,31 +14,72 @@ namespace InfraLLM.Api.Controllers;
 /// <summary>
 /// Exposes InfraLLM itself as an MCP (Model Context Protocol) server.
 ///
-/// Supports two HTTP transport modes:
+/// Supports three HTTP transport modes:
 ///
-/// 1. Stateless POST  (compatible with HttpMcpClient in this codebase)
-///    POST /mcp/messages          → JSON-RPC response returned in HTTP body
+/// 1. Streamable HTTP  (current MCP spec, 2025-03-26 and later)
+///    POST   /mcp                 → JSON-RPC request/response in HTTP body
+///    GET    /mcp                 → 405 (no server-initiated streaming offered)
+///    DELETE /mcp                 → explicit session termination
+///    An Mcp-Session-Id header is issued on initialize and validated on
+///    subsequent requests when the client presents it.
 ///
-/// 2. SSE transport  (MCP 2024-11-05 HTTP+SSE spec)
+/// 2. HTTP+SSE transport  (deprecated MCP 2024-11-05 spec, kept for back-compat)
 ///    GET  /mcp/sse               → SSE stream; sends `endpoint` event
 ///    POST /mcp/messages?session= → JSON-RPC; response pushed over SSE
 ///
+/// 3. Stateless POST  (compatible with HttpMcpClient in this codebase)
+///    POST /mcp/messages          → JSON-RPC response returned in HTTP body
+///
 /// Authentication: Bearer access token (infra_...) or X-API-Key header.
 /// Organization context comes from the token's claims — same isolation as the REST API.
+/// Access tokens may carry scopes (mcp:read / mcp:execute / mcp:write) that
+/// restrict which tools are listed and callable; tokens without scopes retain
+/// full access for backward compatibility.
 /// </summary>
 [ApiController]
 [Route("mcp")]
 [Authorize]
 public class InfraMcpController : ControllerBase
 {
-    // Per-session SSE channels: sessionId → channel of SSE data lines
-    private static readonly ConcurrentDictionary<string, Channel<string>> SseSessions = new();
+    private const string LatestProtocolVersion = "2025-06-18";
+    private static readonly string[] SupportedProtocolVersions = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
+    private const string SessionIdHeader = "Mcp-Session-Id";
+    private const string ProtocolVersionHeader = "MCP-Protocol-Version";
+
+    // ── Streamable HTTP sessions (issued on initialize, in-memory only) ──────
+    private sealed class StreamSession
+    {
+        public required string UserId { get; init; }
+        public required Guid OrganizationId { get; init; }
+        public DateTime LastSeenUtc { get; set; }
+    }
+
+    private static readonly ConcurrentDictionary<string, StreamSession> StreamSessions = new();
+    private static readonly TimeSpan StreamSessionIdleTimeout = TimeSpan.FromHours(24);
+    private const int MaxStreamSessions = 1000;
+
+    // ── Legacy SSE sessions: sessionId → channel of SSE data lines ───────────
+    private sealed class SseSession
+    {
+        public required Channel<string> Channel { get; init; }
+        public required string UserId { get; init; }
+        public required Guid OrganizationId { get; init; }
+    }
+
+    private static readonly ConcurrentDictionary<string, SseSession> SseSessions = new();
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false
     };
+
+    /// <summary>JSON-RPC protocol-level error carrying a spec error code.</summary>
+    private sealed class McpException(int code, string message) : Exception(message)
+    {
+        public int Code { get; } = code;
+    }
 
     private readonly IHostRepository _hosts;
     private readonly IHostNoteRepository _hostNotes;
@@ -64,7 +105,164 @@ public class InfraMcpController : ControllerBase
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // SSE endpoint — clients connect here first to receive the message endpoint
+    // Streamable HTTP transport (MCP 2025-03-26+)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [HttpPost]
+    public async Task<IActionResult> StreamableHttpPost(CancellationToken ct)
+    {
+        // 2025-06-18 clients declare the negotiated version on every request.
+        var declaredVersion = Request.Headers[ProtocolVersionHeader].FirstOrDefault();
+        if (!string.IsNullOrEmpty(declaredVersion) && !SupportedProtocolVersions.Contains(declaredVersion))
+        {
+            return JsonRpcResult(
+                BuildErrorResponse(null, -32600,
+                    $"Unsupported protocol version: {declaredVersion} (supported: {string.Join(", ", SupportedProtocolVersions)})"),
+                StatusCodes.Status400BadRequest);
+        }
+
+        JsonNode? node;
+        try
+        {
+            node = await JsonNode.ParseAsync(Request.Body, cancellationToken: ct);
+        }
+        catch (JsonException)
+        {
+            return JsonRpcResult(
+                BuildErrorResponse(null, -32700, "Parse error: invalid JSON"),
+                StatusCodes.Status400BadRequest);
+        }
+
+        if (node is JsonArray)
+        {
+            // JSON-RPC batching was removed in MCP 2025-06-18 and is not supported here.
+            return JsonRpcResult(
+                BuildErrorResponse(null, -32600, "JSON-RPC batching is not supported"),
+                StatusCodes.Status400BadRequest);
+        }
+
+        if (node is not JsonObject rpc)
+        {
+            return JsonRpcResult(
+                BuildErrorResponse(null, -32600, "Expected a JSON-RPC message object"),
+                StatusCodes.Status400BadRequest);
+        }
+
+        var method = AsString(rpc["method"]);
+        var id = rpc["id"];
+
+        // Notifications (no id) and client → server responses (no method) get 202.
+        if (method == null || id == null)
+            return Accepted();
+
+        var isInitialize = method == "initialize";
+
+        // Validate the session header when the client presents one. Unknown or
+        // expired ids get 404 so spec-compliant clients transparently re-initialize.
+        var sessionId = Request.Headers[SessionIdHeader].FirstOrDefault();
+        if (!isInitialize && !string.IsNullOrEmpty(sessionId) && !TryTouchStreamSession(sessionId))
+        {
+            return JsonRpcResult(
+                BuildErrorResponse(id, -32001, "Session not found or expired — re-initialize"),
+                StatusCodes.Status404NotFound);
+        }
+
+        var response = await ExecuteRequestAsync(method, id, rpc["params"] as JsonObject, ct);
+
+        if (isInitialize && response["error"] == null)
+            Response.Headers[SessionIdHeader] = CreateStreamSession();
+
+        return JsonRpcResult(response, StatusCodes.Status200OK);
+    }
+
+    [HttpGet]
+    public IActionResult StreamableHttpGet()
+    {
+        // This server never initiates messages outside a request, so the
+        // standalone SSE stream is not offered. 405 is the spec-defined answer.
+        Response.Headers.Allow = "POST, DELETE";
+        return StatusCode(StatusCodes.Status405MethodNotAllowed);
+    }
+
+    [HttpDelete]
+    public IActionResult StreamableHttpDelete()
+    {
+        var sessionId = Request.Headers[SessionIdHeader].FirstOrDefault();
+        if (string.IsNullOrEmpty(sessionId))
+            return BadRequest(new { error = $"{SessionIdHeader} header is required" });
+
+        if (StreamSessions.TryGetValue(sessionId, out var session) &&
+            session.UserId == GetUserId() &&
+            session.OrganizationId == GetOrganizationId())
+        {
+            StreamSessions.TryRemove(sessionId, out _);
+            return NoContent();
+        }
+
+        return NotFound();
+    }
+
+    private string CreateStreamSession()
+    {
+        EvictStaleStreamSessions();
+
+        var sessionId = Guid.NewGuid().ToString("N");
+        StreamSessions[sessionId] = new StreamSession
+        {
+            UserId = GetUserId(),
+            OrganizationId = GetOrganizationId(),
+            LastSeenUtc = DateTime.UtcNow
+        };
+        return sessionId;
+    }
+
+    /// <summary>Returns true when the session exists, is owned by the caller, and is not idle-expired.</summary>
+    private bool TryTouchStreamSession(string sessionId)
+    {
+        if (!StreamSessions.TryGetValue(sessionId, out var session))
+            return false;
+
+        if (DateTime.UtcNow - session.LastSeenUtc > StreamSessionIdleTimeout)
+        {
+            StreamSessions.TryRemove(sessionId, out _);
+            return false;
+        }
+
+        // A session id is only valid for the principal that initialized it.
+        if (session.UserId != GetUserId() || session.OrganizationId != GetOrganizationId())
+            return false;
+
+        session.LastSeenUtc = DateTime.UtcNow;
+        return true;
+    }
+
+    private static void EvictStaleStreamSessions()
+    {
+        var cutoff = DateTime.UtcNow - StreamSessionIdleTimeout;
+        foreach (var (key, session) in StreamSessions)
+        {
+            if (session.LastSeenUtc < cutoff)
+                StreamSessions.TryRemove(key, out _);
+        }
+
+        // Hard cap so a misbehaving client can't grow the dictionary unbounded.
+        while (StreamSessions.Count >= MaxStreamSessions)
+        {
+            var oldest = StreamSessions.MinBy(kv => kv.Value.LastSeenUtc);
+            if (oldest.Key == null || !StreamSessions.TryRemove(oldest.Key, out _))
+                break;
+        }
+    }
+
+    private ContentResult JsonRpcResult(JsonObject response, int statusCode) => new()
+    {
+        Content = response.ToJsonString(JsonOpts),
+        ContentType = "application/json",
+        StatusCode = statusCode
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Legacy HTTP+SSE transport (MCP 2024-11-05) — kept for back-compat
     // ─────────────────────────────────────────────────────────────────────────
 
     [HttpGet("sse")]
@@ -76,7 +274,12 @@ public class InfraMcpController : ControllerBase
             SingleReader = true,
             SingleWriter = false
         });
-        SseSessions[sessionId] = channel;
+        SseSessions[sessionId] = new SseSession
+        {
+            Channel = channel,
+            UserId = GetUserId(),
+            OrganizationId = GetOrganizationId()
+        };
 
         Response.Headers["Content-Type"] = "text/event-stream";
         Response.Headers["Cache-Control"] = "no-cache";
@@ -103,7 +306,7 @@ public class InfraMcpController : ControllerBase
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // JSON-RPC message handler — works in both stateless and SSE mode
+    // JSON-RPC message handler — legacy SSE mode and stateless mode
     // ─────────────────────────────────────────────────────────────────────────
 
     [HttpPost("messages")]
@@ -114,10 +317,10 @@ public class InfraMcpController : ControllerBase
         JsonObject? rpc;
         try
         {
-            using var doc = await JsonDocument.ParseAsync(Request.Body, cancellationToken: ct);
-            rpc = JsonNode.Parse(doc.RootElement.GetRawText()) as JsonObject;
+            var node = await JsonNode.ParseAsync(Request.Body, cancellationToken: ct);
+            rpc = node as JsonObject;
         }
-        catch
+        catch (JsonException)
         {
             return BadRequest(new { error = "Invalid JSON" });
         }
@@ -125,98 +328,172 @@ public class InfraMcpController : ControllerBase
         if (rpc == null)
             return BadRequest(new { error = "Expected JSON object" });
 
-        var method = rpc["method"]?.GetValue<string>() ?? string.Empty;
-        var id = rpc["id"]; // null for notifications
+        // SSE sessions are bound to the principal that opened the stream;
+        // reject posts from anyone else so responses can't be injected into
+        // another user's stream.
+        SseSession? sseSession = null;
+        if (!string.IsNullOrEmpty(session))
+        {
+            if (!SseSessions.TryGetValue(session, out sseSession) ||
+                sseSession.UserId != GetUserId() ||
+                sseSession.OrganizationId != GetOrganizationId())
+            {
+                return NotFound(new { error = "Unknown SSE session" });
+            }
+        }
+
+        var method = AsString(rpc["method"]) ?? string.Empty;
+        var id = rpc["id"];
 
         // Notifications have no id and expect no response
-        if (id == null && method.StartsWith("notifications/"))
-        {
-            // Accepted silently
+        if (id == null)
             return Accepted();
-        }
 
-        var @params = rpc["params"] as JsonObject;
-        JsonObject result;
-
-        try
-        {
-            result = await DispatchAsync(method, @params, ct);
-        }
-        catch (Exception ex)
-        {
-            var errResponse = BuildErrorResponse(id, -32603, ex.Message);
-            return await SendResponseAsync(session, errResponse, ct);
-        }
-
-        var response = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id?.DeepClone(),
-            ["result"] = result
-        };
-
-        return await SendResponseAsync(session, response, ct);
+        var response = await ExecuteRequestAsync(method, id, rpc["params"] as JsonObject, ct);
+        return await SendResponseAsync(sseSession, response, ct);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // JSON-RPC dispatch
+    // JSON-RPC dispatch (shared by all transports)
     // ─────────────────────────────────────────────────────────────────────────
+
+    private async Task<JsonObject> ExecuteRequestAsync(string method, JsonNode? id, JsonObject? @params, CancellationToken ct)
+    {
+        try
+        {
+            var result = await DispatchAsync(method, @params, ct);
+            return new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = id?.DeepClone(),
+                ["result"] = result
+            };
+        }
+        catch (McpException ex)
+        {
+            return BuildErrorResponse(id, ex.Code, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            return BuildErrorResponse(id, -32603, ex.Message);
+        }
+    }
 
     private async Task<JsonObject> DispatchAsync(string method, JsonObject? @params, CancellationToken ct) =>
         method switch
         {
             "initialize" => HandleInitialize(@params),
+            "ping" => new JsonObject(),
             "tools/list" => HandleToolsList(),
             "tools/call" => await HandleToolCallAsync(@params, ct),
-            _ => throw new InvalidOperationException($"Method not found: {method}")
+            _ => throw new McpException(-32601, $"Method not found: {method}")
         };
 
-    private static JsonObject HandleInitialize(JsonObject? _) => new()
+    private static JsonObject HandleInitialize(JsonObject? @params)
     {
-        ["protocolVersion"] = "2024-11-05",
-        ["capabilities"] = new JsonObject
-        {
-            ["tools"] = new JsonObject()
-        },
-        ["serverInfo"] = new JsonObject
-        {
-            ["name"] = "InfraLLM",
-            ["version"] = "1.0"
-        }
-    };
+        // Echo the client's requested version when we support it; otherwise
+        // offer our latest and let the client decide whether to continue.
+        var requested = AsString(@params?["protocolVersion"]);
+        var negotiated = requested != null && SupportedProtocolVersions.Contains(requested)
+            ? requested
+            : LatestProtocolVersion;
 
-    private static JsonObject HandleToolsList() => new()
+        return new JsonObject
+        {
+            ["protocolVersion"] = negotiated,
+            ["capabilities"] = new JsonObject
+            {
+                ["tools"] = new JsonObject
+                {
+                    ["listChanged"] = false
+                }
+            },
+            ["serverInfo"] = new JsonObject
+            {
+                ["name"] = "InfraLLM",
+                ["title"] = "InfraLLM Infrastructure Management",
+                ["version"] = "1.0"
+            }
+        };
+    }
+
+    private JsonObject HandleToolsList()
     {
-        ["tools"] = new JsonArray(ToolDefinitions.Select(t => (JsonNode)t.Schema.DeepClone()).ToArray())
-    };
+        var scopes = GetTokenScopes();
+        var visible = ToolDefinitions
+            .Where(t => scopes == null || scopes.Contains(t.RequiredScope))
+            .Select(t => (JsonNode)t.Schema.DeepClone());
+
+        return new JsonObject
+        {
+            ["tools"] = new JsonArray(visible.ToArray())
+        };
+    }
 
     private async Task<JsonObject> HandleToolCallAsync(JsonObject? @params, CancellationToken ct)
     {
-        var name = @params?["name"]?.GetValue<string>() ?? string.Empty;
+        var name = AsString(@params?["name"]) ?? string.Empty;
         var args = @params?["arguments"] as JsonObject ?? new JsonObject();
+
+        var tool = ToolDefinitions.FirstOrDefault(t => t.Name == name);
+        if (tool.Name == null)
+            throw new McpException(-32602, $"Unknown tool: {name}");
+
+        var scopes = GetTokenScopes();
+        if (scopes != null && !scopes.Contains(tool.RequiredScope))
+        {
+            return ToolResult(
+                $"Access denied: this access token does not have the '{tool.RequiredScope}' scope required by '{name}'.",
+                isError: true);
+        }
 
         var orgId = GetOrganizationId();
         var userId = GetUserId();
 
-        var text = name switch
+        string text;
+        var isError = false;
+        try
         {
-            "list_hosts" => await ListHostsAsync(orgId, args, ct),
-            "get_host_details" => await GetHostDetailsAsync(orgId, args, ct),
-            "execute_command" => await ExecuteCommandAsync(userId, orgId, args, ct),
-            "test_host_connection" => await TestHostConnectionAsync(orgId, args, ct),
-            "list_policies" => await ListPoliciesAsync(orgId, ct),
-            "get_audit_logs" => await GetAuditLogsAsync(orgId, args, ct),
-            "tail_logs" => await TailLogsAsync(userId, orgId, args, ct),
-            "update_host_notes" => await UpdateHostNotesAsync(userId, orgId, args, ct),
-            "read_file" => await ReadFileAsync(userId, orgId, args, ct),
-            "check_service_status" => await CheckServiceStatusAsync(userId, orgId, args, ct),
-            "list_containers" => await ListContainersAsync(userId, orgId, args, ct),
-            "check_container_status" => await CheckContainerStatusAsync(userId, orgId, args, ct),
-            "write_file" => await WriteFileAsync(userId, orgId, args, ct),
-            _ => $"Unknown tool: {name}"
-        };
+            text = name switch
+            {
+                "list_hosts" => await ListHostsAsync(orgId, args, ct),
+                "get_host_details" => await GetHostDetailsAsync(orgId, args, ct),
+                "execute_command" => await ExecuteCommandAsync(userId, orgId, args, ct),
+                "test_host_connection" => await TestHostConnectionAsync(orgId, args, ct),
+                "list_policies" => await ListPoliciesAsync(orgId, ct),
+                "get_audit_logs" => await GetAuditLogsAsync(orgId, args, ct),
+                "tail_logs" => await TailLogsAsync(userId, orgId, args, ct),
+                "update_host_notes" => await UpdateHostNotesAsync(userId, orgId, args, ct),
+                "read_file" => await ReadFileAsync(userId, orgId, args, ct),
+                "check_service_status" => await CheckServiceStatusAsync(userId, orgId, args, ct),
+                "list_containers" => await ListContainersAsync(userId, orgId, args, ct),
+                "check_container_status" => await CheckContainerStatusAsync(userId, orgId, args, ct),
+                "write_file" => await WriteFileAsync(userId, orgId, args, ct),
+                _ => throw new McpException(-32602, $"Unknown tool: {name}")
+            };
+        }
+        catch (McpException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Tool execution failures are reported in-result so the model can
+            // see them, per the MCP spec — not as protocol errors.
+            text = $"Error: {ex.Message}";
+            isError = true;
+        }
 
-        return new JsonObject
+        return ToolResult(text, isError);
+    }
+
+    private static JsonObject ToolResult(string text, bool isError = false)
+    {
+        var result = new JsonObject
         {
             ["content"] = new JsonArray(new JsonObject
             {
@@ -224,6 +501,9 @@ public class InfraMcpController : ControllerBase
                 ["text"] = text
             })
         };
+        if (isError)
+            result["isError"] = true;
+        return result;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -624,15 +904,15 @@ public class InfraMcpController : ControllerBase
     // ─────────────────────────────────────────────────────────────────────────
 
     private async Task<IActionResult> SendResponseAsync(
-        string? sessionId, JsonObject response, CancellationToken ct)
+        SseSession? sseSession, JsonObject response, CancellationToken ct)
     {
         var json = response.ToJsonString(JsonOpts);
 
         // SSE mode: push response to the SSE channel
-        if (!string.IsNullOrEmpty(sessionId) && SseSessions.TryGetValue(sessionId, out var channel))
+        if (sseSession != null)
         {
             var sseData = $"event: message\ndata: {json}\n\n";
-            await channel.Writer.WriteAsync(sseData, ct);
+            await sseSession.Channel.Writer.WriteAsync(sseData, ct);
             return Accepted();
         }
 
@@ -651,6 +931,9 @@ public class InfraMcpController : ControllerBase
         }
     };
 
+    private static string? AsString(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var s) ? s : null;
+
     private string GetUserId() =>
         User.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? throw new UnauthorizedAccessException("User ID not found in token");
@@ -662,20 +945,38 @@ public class InfraMcpController : ControllerBase
         throw new UnauthorizedAccessException("Organization ID not found in token");
     }
 
+    /// <summary>
+    /// Scopes granted to the caller, or null when unrestricted.
+    /// JWT browser sessions and access tokens created without scopes are unrestricted.
+    /// </summary>
+    private IReadOnlySet<string>? GetTokenScopes()
+    {
+        if (User.FindFirstValue("auth_method") != "access_token")
+            return null;
+
+        var scope = User.FindFirstValue("scope");
+        if (string.IsNullOrWhiteSpace(scope))
+            return null;
+
+        return scope
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Tool schema definitions
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static readonly IReadOnlyList<(string Name, JsonObject Schema)> ToolDefinitions =
+    private static readonly IReadOnlyList<(string Name, string RequiredScope, JsonObject Schema)> ToolDefinitions =
     [
-        ("list_hosts", BuildSchema("list_hosts",
+        ("list_hosts", AccessTokenScopes.Read, BuildSchema("list_hosts",
             "List all managed hosts in your organization. Optionally filter by environment.",
             new Dictionary<string, JsonObject>
             {
                 ["environment"] = Prop("string", "Filter by environment (e.g. production, staging)")
             })),
 
-        ("get_host_details", BuildSchema("get_host_details",
+        ("get_host_details", AccessTokenScopes.Read, BuildSchema("get_host_details",
             "Get detailed information about a specific host, including its operational notes.",
             new Dictionary<string, JsonObject>
             {
@@ -683,7 +984,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id"])),
 
-        ("execute_command", BuildSchema("execute_command",
+        ("execute_command", AccessTokenScopes.Execute, BuildSchema("execute_command",
             "Execute a shell command on a managed host via SSH. Respects all configured command policies. Use dry_run=true to check whether the command would be permitted without executing it.",
             new Dictionary<string, JsonObject>
             {
@@ -693,7 +994,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id", "command"])),
 
-        ("test_host_connection", BuildSchema("test_host_connection",
+        ("test_host_connection", AccessTokenScopes.Read, BuildSchema("test_host_connection",
             "Test SSH connectivity to a host. Returns success or failure with diagnostic info.",
             new Dictionary<string, JsonObject>
             {
@@ -701,11 +1002,11 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id"])),
 
-        ("list_policies", BuildSchema("list_policies",
+        ("list_policies", AccessTokenScopes.Read, BuildSchema("list_policies",
             "List all command policies configured in your organization, including allowed and denied command patterns.",
             new Dictionary<string, JsonObject>())),
 
-        ("get_audit_logs", BuildSchema("get_audit_logs",
+        ("get_audit_logs", AccessTokenScopes.Read, BuildSchema("get_audit_logs",
             "Retrieve recent audit log entries. Optionally filter by host.",
             new Dictionary<string, JsonObject>
             {
@@ -713,7 +1014,7 @@ public class InfraMcpController : ControllerBase
                 ["limit"] = Prop("integer", "Maximum entries to return (1-100, default 20)")
             })),
 
-        ("tail_logs", BuildSchema("tail_logs",
+        ("tail_logs", AccessTokenScopes.Read, BuildSchema("tail_logs",
             "Retrieve the most recent log entries from a log file or systemd journal on a host. Use this tool whenever you need to investigate errors, diagnose service failures, review crash output, check authentication attempts, or understand recent system activity. For log files supply the absolute path as source (e.g. /var/log/syslog, /var/log/nginx/error.log, /var/log/auth.log, /var/log/postgresql/postgresql.log) with source_type='file' (default). For systemd-managed services supply the service name as source (e.g. nginx, docker, sshd, postgresql) with source_type='journald'. Prefer this tool over read_file for any log file because it returns only the most recent lines without transferring the entire file.",
             new Dictionary<string, JsonObject>
             {
@@ -724,7 +1025,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id", "source"])),
 
-        ("update_host_notes", BuildSchema("update_host_notes",
+        ("update_host_notes", AccessTokenScopes.Write, BuildSchema("update_host_notes",
             "Create or replace the operational notes stored for a host. Use this to record findings, runbooks, or context about a host.",
             new Dictionary<string, JsonObject>
             {
@@ -733,7 +1034,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id", "content"])),
 
-        ("read_file", BuildSchema("read_file",
+        ("read_file", AccessTokenScopes.Read, BuildSchema("read_file",
             "Read the full contents of a file on a managed host via SSH.",
             new Dictionary<string, JsonObject>
             {
@@ -742,7 +1043,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id", "file_path"])),
 
-        ("check_service_status", BuildSchema("check_service_status",
+        ("check_service_status", AccessTokenScopes.Read, BuildSchema("check_service_status",
             "Check the status of a systemd service on a managed host (runs systemctl status).",
             new Dictionary<string, JsonObject>
             {
@@ -751,7 +1052,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id", "service_name"])),
 
-        ("list_containers", BuildSchema("list_containers",
+        ("list_containers", AccessTokenScopes.Read, BuildSchema("list_containers",
             "List Docker containers on a managed host. Shows name, image, status, and ports.",
             new Dictionary<string, JsonObject>
             {
@@ -760,7 +1061,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id"])),
 
-        ("check_container_status", BuildSchema("check_container_status",
+        ("check_container_status", AccessTokenScopes.Read, BuildSchema("check_container_status",
             "Get the current state and recent log output for a specific Docker container.",
             new Dictionary<string, JsonObject>
             {
@@ -770,7 +1071,7 @@ public class InfraMcpController : ControllerBase
             },
             required: ["host_id", "container_name"])),
 
-        ("write_file", BuildSchema("write_file",
+        ("write_file", AccessTokenScopes.Write, BuildSchema("write_file",
             "Write content to a file on a managed host. Creates a timestamped backup by default. Use for safe config file edits.",
             new Dictionary<string, JsonObject>
             {

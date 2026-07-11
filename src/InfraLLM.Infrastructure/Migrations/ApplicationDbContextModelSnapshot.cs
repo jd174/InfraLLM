@@ -50,6 +50,9 @@ namespace InfraLLM.Infrastructure.Migrations
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Scopes")
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("TokenHash")
                         .IsRequired()
                         .HasMaxLength(64)

@@ -248,6 +248,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             e.Property(x => x.TokenHash).HasMaxLength(64).IsRequired(); // SHA-256 hex = 64 chars
             e.Property(x => x.UserId).HasMaxLength(255).IsRequired();
             e.Property(x => x.IsActive).HasDefaultValue(true);
+            e.Property(x => x.Scopes)
+                .HasColumnType("jsonb")
+                .HasConversion(stringListConverter!)
+                .Metadata.SetValueComparer(stringListComparer);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => x.TokenHash).IsUnique();
             e.HasIndex(x => new { x.UserId, x.IsActive });

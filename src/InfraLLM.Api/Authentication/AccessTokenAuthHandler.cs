@@ -65,13 +65,18 @@ public class AccessTokenAuthHandler : AuthenticationHandler<AccessTokenAuthOptio
             .Select(u => new { u.Email, u.UserName })
             .FirstOrDefaultAsync();
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, token.UserId),
-            new Claim(ClaimTypes.Email, user?.Email ?? string.Empty),
-            new Claim("org_id", token.OrganizationId.ToString()),
-            new Claim("auth_method", "access_token"),
+            new(ClaimTypes.NameIdentifier, token.UserId),
+            new(ClaimTypes.Email, user?.Email ?? string.Empty),
+            new("org_id", token.OrganizationId.ToString()),
+            new("auth_method", "access_token"),
         };
+
+        // Scoped tokens carry a space-delimited scope claim; unscoped tokens
+        // (including all tokens created before scopes existed) remain unrestricted.
+        if (token.Scopes is { Count: > 0 })
+            claims.Add(new Claim("scope", string.Join(' ', token.Scopes)));
 
         var identity = new ClaimsIdentity(claims, SchemeName);
         var principal = new ClaimsPrincipal(identity);

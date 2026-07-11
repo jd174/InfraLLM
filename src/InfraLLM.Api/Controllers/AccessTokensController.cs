@@ -38,7 +38,8 @@ public class AccessTokensController : ControllerBase
                 t.CreatedAt,
                 t.ExpiresAt,
                 t.LastUsedAt,
-                t.IsActive))
+                t.IsActive,
+                t.Scopes))
             .ToListAsync(ct);
 
         return Ok(tokens);
@@ -50,6 +51,29 @@ public class AccessTokensController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { error = "Token name is required" });
+
+        // Normalize + validate scopes. Null/empty = unrestricted token.
+        List<string>? scopes = null;
+        if (request.Scopes is { Count: > 0 })
+        {
+            scopes = request.Scopes
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            var invalid = scopes.Where(s => !AccessTokenScopes.IsValid(s)).ToList();
+            if (invalid.Count > 0)
+            {
+                return BadRequest(new
+                {
+                    error = $"Unknown scope(s): {string.Join(", ", invalid)}. Valid scopes: {string.Join(", ", AccessTokenScopes.All)}"
+                });
+            }
+
+            if (scopes.Count == 0)
+                scopes = null;
+        }
 
         var userId = GetUserId();
         var orgId = GetOrganizationId();
@@ -70,7 +94,8 @@ public class AccessTokensController : ControllerBase
             OrganizationId = orgId,
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = request.ExpiresAt,
-            IsActive = true
+            IsActive = true,
+            Scopes = scopes
         };
 
         _db.AccessTokens.Add(token);
@@ -82,7 +107,8 @@ public class AccessTokensController : ControllerBase
             token.Name,
             rawToken,
             token.CreatedAt,
-            token.ExpiresAt));
+            token.ExpiresAt,
+            token.Scopes));
     }
 
     /// <summary>Revoke (deactivate) an access token.</summary>
@@ -131,15 +157,18 @@ public record AccessTokenResponse(
     DateTime CreatedAt,
     DateTime? ExpiresAt,
     DateTime? LastUsedAt,
-    bool IsActive);
+    bool IsActive,
+    List<string>? Scopes);
 
 public record CreateAccessTokenRequest(
     string Name,
-    DateTime? ExpiresAt);
+    DateTime? ExpiresAt,
+    List<string>? Scopes);
 
 public record CreateAccessTokenResponse(
     Guid Id,
     string Name,
     string Token,
     DateTime CreatedAt,
-    DateTime? ExpiresAt);
+    DateTime? ExpiresAt,
+    List<string>? Scopes);
