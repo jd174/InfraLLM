@@ -201,6 +201,45 @@ If you're using Portainer, deploy `docker-compose.prod.yml` directly as a Stack.
 | `ANTHROPIC_API_KEY` | (Optional) From console.anthropic.com |
 | `OPENAI_API_KEY` | (Optional) From platform.openai.com |
 | `OLLAMA_BASE_URL` | (Optional) Ollama endpoint if using local models |
+---
+
+## Use InfraLLM as an MCP server (Claude Desktop)
+
+InfraLLM exposes an MCP endpoint over two transports:
+
+- `https://<infrallmUrl>/mcp` — **Streamable HTTP** (current MCP spec; use this with any modern MCP client)
+- `https://<infrallmUrl>/mcp/sse` — legacy HTTP+SSE (deprecated 2024-11-05 spec; kept for older clients)
+
+1) Create an access token in the InfraLLM UI: **Access Tokens** page. Tokens can optionally be restricted to scopes:
+
+   | Scope | Grants |
+   |---|---|
+   | `mcp:read` | Host inventory, policies, audit logs, log/file reads, status checks |
+   | `mcp:execute` | `execute_command` (still subject to command policies) |
+   | `mcp:write` | `write_file`, `update_host_notes` |
+
+   A token created without scopes has full access. Tools outside a token's scopes are hidden from `tools/list` and rejected if called.
+
+2) Add an MCP server entry in your Claude Desktop config (replace placeholders):
+
+```json
+{
+	"mcpServers": {
+		"infrallm": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"mcp-remote",
+				"https://<infrallmUrl>/mcp",
+				"--header",
+				"Authorization: Bearer <your-infrallm-access-token>"
+			]
+		}
+	}
+}
+```
+
+`mcp-remote` negotiates Streamable HTTP first and falls back to SSE automatically, so the `/mcp` URL works for both transports.
 
 ### Separate containers
 
