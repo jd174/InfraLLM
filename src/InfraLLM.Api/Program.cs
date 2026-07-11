@@ -144,7 +144,8 @@ builder.Services.AddHostedService<InfraLLM.Api.Services.JobsCronHostedService>()
 
 // MCP Services
 builder.Services.AddScoped<IMcpServerRepository, McpServerRepository>();
-builder.Services.AddScoped<IMcpClientFactory, McpClientFactory>();
+// Singleton: all dependencies are singletons, and the singleton StdioMcpClientCache consumes it
+builder.Services.AddSingleton<IMcpClientFactory, McpClientFactory>();
 builder.Services.AddScoped<IMcpToolRegistry, McpToolRegistry>();
 // Singleton cache keeps stdio processes alive across requests (avoids uvx/npx cold-start per call)
 builder.Services.AddSingleton<StdioMcpClientCache>();
