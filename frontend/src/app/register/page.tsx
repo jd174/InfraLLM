@@ -28,7 +28,7 @@ export default function RegisterPage() {
     try {
       const response = await register({ displayName, email, password, organizationName });
       setAuth(response.user, response.token);
-      router.push("/chat");
+      router.push("/overview");
     } catch (err) {
       if (err instanceof ApiError) {
         setError(`${err.message} (HTTP ${err.status})`);

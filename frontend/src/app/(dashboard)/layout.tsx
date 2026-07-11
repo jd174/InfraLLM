@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useFeatures } from "@/hooks/useFeatures";
 import {
+  HomeIcon,
   ChatIcon,
   JobRunsIcon,
   JobsIcon,
@@ -26,19 +27,22 @@ import {
   TokenIcon,
 } from "@/components/ui/Icons";
 
-const BASE_NAV_ITEMS = [
+// Primary navigation: the MCP gateway itself
+const GATEWAY_NAV_ITEMS = [
+  { href: "/overview", label: "Overview", Icon: HomeIcon },
   { href: "/hosts", label: "Hosts", Icon: HostsIcon },
-  // { href: "/mcp-servers", label: "MCP Servers", Icon: McpIcon },
-  { href: "/credentials", label: "Credentials", Icon: CredentialsIcon },
-  { href: "/policies", label: "Policies", Icon: PoliciesIcon },
-  { href: "/audit", label: "Audit Log", Icon: AuditIcon },
   { href: "/access-tokens", label: "Access Tokens", Icon: TokenIcon },
+  { href: "/policies", label: "Policies", Icon: PoliciesIcon },
+  { href: "/credentials", label: "Credentials", Icon: CredentialsIcon },
+  { href: "/audit", label: "Audit Log", Icon: AuditIcon },
   { href: "/settings", label: "Settings", Icon: SettingsIcon },
 ];
 
-const LLM_NAV_ITEMS = [
-  { href: "/job-runs", label: "Job Runs", Icon: JobRunsIcon },
+// Secondary: the optional built-in assistant (requires a configured LLM provider)
+const ASSISTANT_NAV_ITEMS = [
+  { href: "/chat", label: "Chat", Icon: ChatIcon },
   { href: "/jobs", label: "Jobs", Icon: JobsIcon },
+  { href: "/job-runs", label: "Job Runs", Icon: JobRunsIcon },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -48,10 +52,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { sidebarOpen, toggleSidebar } = useUIStore();
   const { chatEnabled } = useFeatures();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  const navItems = chatEnabled
-    ? [{ href: "/chat", label: "Chat", Icon: ChatIcon }, ...LLM_NAV_ITEMS, ...BASE_NAV_ITEMS]
-    : BASE_NAV_ITEMS;
 
   useEffect(() => {
     if (!isAuthenticated) router.push("/login");
@@ -90,7 +90,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Nav */}
         <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-          {navItems.map(({ href, label, Icon }) => {
+          {GATEWAY_NAV_ITEMS.map(({ href, label, Icon }) => {
             const active = pathname.startsWith(href);
             return (
               <Link
@@ -109,6 +109,39 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </Link>
             );
           })}
+
+          {chatEnabled && (
+            <>
+              <div className="pt-3 pb-1 px-2.5">
+                {sidebarOpen ? (
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Assistant
+                  </p>
+                ) : (
+                  <div className="border-t border-border" />
+                )}
+              </div>
+              {ASSISTANT_NAV_ITEMS.map(({ href, label, Icon }) => {
+                const active = pathname.startsWith(href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    title={!sidebarOpen ? label : undefined}
+                    className={cn(
+                      "flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition",
+                      active
+                        ? "bg-accent text-accent-foreground"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    <Icon size={16} className="shrink-0" />
+                    {sidebarOpen && <span className="truncate">{label}</span>}
+                  </Link>
+                );
+              })}
+            </>
+          )}
         </nav>
 
         {/* Footer */}
@@ -157,7 +190,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
 
         <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-          {navItems.map(({ href, label, Icon }) => {
+          {GATEWAY_NAV_ITEMS.map(({ href, label, Icon }) => {
             const active = pathname.startsWith(href);
             return (
               <Link
@@ -176,6 +209,35 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </Link>
             );
           })}
+
+          {chatEnabled && (
+            <>
+              <div className="pt-3 pb-1 px-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Assistant
+                </p>
+              </div>
+              {ASSISTANT_NAV_ITEMS.map(({ href, label, Icon }) => {
+                const active = pathname.startsWith(href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={cn(
+                      "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition",
+                      active
+                        ? "bg-accent text-accent-foreground"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    <Icon size={16} />
+                    <span>{label}</span>
+                  </Link>
+                );
+              })}
+            </>
+          )}
         </nav>
 
         <div className="p-2 border-t border-border">
